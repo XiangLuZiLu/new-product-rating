@@ -10,6 +10,7 @@
 - 图片单独存储：支持 Cloudflare R2，也支持大部分 S3 兼容对象存储，例如七牛云 Kodo、阿里云 OSS、腾讯云 COS、MinIO 等。
 - 评分/历史数据可配置：支持 D1、KV、自定义 HTTP 数据接口。
 - 数据库只保存图片 URL，不保存图片二进制内容，避免图片占用数据库空间。
+- 登录状态按浏览器保存：换浏览器需要重新登录；可配置空闲超时时间，长时间未操作后需要重新输入密码。
 
 ## 一、安装依赖
 
@@ -157,6 +158,7 @@ ADMIN_PATH=review-admin-2026
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=你的强密码
 SESSION_SECRET=一串较长随机字符
+SESSION_IDLE_MINUTES=120
 ```
 
 后台访问：
@@ -164,6 +166,9 @@ SESSION_SECRET=一串较长随机字符
 ```text
 https://你的域名/review-admin-2026
 ```
+
+说明：`SESSION_IDLE_MINUTES` 是后台登录空闲超时时间，单位分钟。默认建议 `120`，表示当前浏览器 120 分钟无操作后需要重新输入密码。更换浏览器或更换设备访问时，因为没有当前浏览器的登录 Cookie，也需要重新输入密码。
+
 
 ## 五、部署
 

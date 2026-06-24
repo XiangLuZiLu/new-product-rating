@@ -48,20 +48,43 @@ function safeEqual(a, b) {
   return result === 0;
 }
 
+function getSessionIdleSeconds(env) {
+  const raw = Number(env.SESSION_IDLE_MINUTES || env.SESSION_TIMEOUT_MINUTES || 120);
+  if (!Number.isFinite(raw) || raw <= 0) return 120 * 60;
+  const minutes = Math.max(1, Math.min(Math.floor(raw), 43200));
+  return minutes * 60;
+}
+
+async function createSessionCookie(request, env, username) {
+  const secret = env.SESSION_SECRET || env.ADMIN_PASSWORD;
+  const now = Date.now();
+  const idleSeconds = getSessionIdleSeconds(env);
+  const payload = base64UrlEncode(JSON.stringify({
+    user: username,
+    iat: now,
+    exp: now + idleSeconds * 1000
+  }));
+  const signature = await hmac(payload, secret);
+  const token = `${payload}.${signature}`;
+  const secure = new URL(request.url).protocol === 'https:' ? '; Secure' : '';
+  return `session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${idleSeconds}${secure}`;
+}
+
 async function verifySession(request, env) {
   const token = getCookie(request, 'session');
-  if (!token) return false;
+  if (!token) return null;
   const [payload, signature] = token.split('.');
-  if (!payload || !signature) return false;
+  if (!payload || !signature) return null;
   const secret = env.SESSION_SECRET || env.ADMIN_PASSWORD;
-  if (!secret) return false;
+  if (!secret) return null;
   const expected = await hmac(payload, secret);
-  if (!safeEqual(signature, expected)) return false;
+  if (!safeEqual(signature, expected)) return null;
   try {
     const data = JSON.parse(base64UrlDecode(payload));
-    return data.exp && Date.now() < data.exp;
+    if (!data.exp || Date.now() >= data.exp) return null;
+    return { username: String(data.user || 'admin') };
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -72,7 +95,15 @@ export async function onRequest(context) {
   if (request.method === 'OPTIONS') return next();
   if (url.pathname === '/api/login' || url.pathname === '/api/logout') return next();
 
-  const ok = await verifySession(request, env);
-  if (!ok) return json({ ok: false, message: '未登录或登录已过期' }, 401);
-  return next();
+  const session = await verifySession(request, env);
+  if (!session) return json({ ok: false, message: '未登录或登录已过期' }, 401);
+
+  const response = await next();
+  const headers = new Headers(response.headers);
+  headers.append('Set-Cookie', await createSessionCookie(request, env, session.username));
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  });
 }

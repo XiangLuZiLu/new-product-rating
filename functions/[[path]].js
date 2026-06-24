@@ -11,7 +11,14 @@ function normalizeAdminPath(value) {
   return '/' + path;
 }
 
-function adminHtml(adminPath) {
+
+function getSessionIdleMinutes(env) {
+  const raw = Number(env.SESSION_IDLE_MINUTES || env.SESSION_TIMEOUT_MINUTES || 120);
+  if (!Number.isFinite(raw) || raw <= 0) return 120;
+  return Math.max(1, Math.min(Math.floor(raw), 43200));
+}
+
+function adminHtml(adminPath, sessionIdleMinutes) {
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -43,7 +50,7 @@ function adminHtml(adminPath) {
         </label>
         <button type="submit" class="primary full">登录后台</button>
       </form>
-      <p class="tip">后台入口：<code>${adminPath}</code>。账号和密码由环境变量 <code>ADMIN_USERNAME</code>、<code>ADMIN_PASSWORD</code> 设置。</p>
+      <p class="tip">后台入口：<code>${adminPath}</code>。账号和密码由环境变量 <code>ADMIN_USERNAME</code>、<code>ADMIN_PASSWORD</code> 设置。登录状态只保存在当前浏览器，长时间未操作后需要重新登录。</p>
     </section>
 
     <section id="appView" class="hidden">
@@ -155,7 +162,7 @@ function adminHtml(adminPath) {
     </section>
   </main>
 
-  <script>window.__ADMIN_PATH__ = ${JSON.stringify(adminPath)};</script>
+  <script>window.__ADMIN_PATH__ = ${JSON.stringify(adminPath)}; window.__SESSION_IDLE_MINUTES__ = ${JSON.stringify(sessionIdleMinutes)};</script>
   <script src="/assets/app.js" defer></script>
 </body>
 </html>`;
@@ -175,11 +182,12 @@ export async function onRequest(context) {
   const { request, env } = context;
   const url = new URL(request.url);
   const adminPath = normalizeAdminPath(env.ADMIN_PATH || env.ADMIN_SUFFIX);
+  const sessionIdleMinutes = getSessionIdleMinutes(env);
 
   if (request.method === 'GET' || request.method === 'HEAD') {
     const normalizedPath = url.pathname.replace(/\/+$/, '') || '/';
     if (normalizedPath === adminPath) {
-      return responseHtml(adminHtml(adminPath));
+      return responseHtml(adminHtml(adminPath, sessionIdleMinutes));
     }
   }
 

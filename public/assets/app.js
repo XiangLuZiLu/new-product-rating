@@ -28,6 +28,12 @@ let pageCount = 3;
 let currentIndex = 0;
 let scrollTimer = null;
 let isRendering = false;
+let sessionGuardStarted = false;
+let sessionIdleTimer = null;
+let sessionLastRefreshAt = 0;
+const sessionIdleMinutes = Number(window.__SESSION_IDLE_MINUTES__ || 120);
+const sessionIdleMs = Math.max(1, sessionIdleMinutes) * 60 * 1000;
+const sessionRefreshIntervalMs = Math.min(5 * 60 * 1000, Math.max(30 * 1000, sessionIdleMs / 3));
 
 const scoreFields = [
   { key: 'appearance_score', label: '外观设计' },
@@ -97,6 +103,7 @@ function showMessage(text, type = 'success') {
 }
 
 function showLogin() {
+  stopSessionIdleGuard();
   appView.classList.add('hidden');
   loginView.classList.remove('hidden');
 }
@@ -104,6 +111,57 @@ function showLogin() {
 function showApp() {
   loginView.classList.add('hidden');
   appView.classList.remove('hidden');
+  startSessionIdleGuard();
+}
+
+function startSessionIdleGuard() {
+  if (sessionGuardStarted) {
+    resetSessionIdleTimer(false);
+    return;
+  }
+  sessionGuardStarted = true;
+  sessionLastRefreshAt = Date.now();
+  const events = ['click', 'input', 'keydown', 'touchstart', 'mousemove'];
+  for (const name of events) {
+    document.addEventListener(name, handleSessionActivity, { passive: true });
+  }
+  resetSessionIdleTimer(false);
+}
+
+function stopSessionIdleGuard() {
+  if (!sessionGuardStarted) return;
+  sessionGuardStarted = false;
+  window.clearTimeout(sessionIdleTimer);
+  sessionIdleTimer = null;
+  const events = ['click', 'input', 'keydown', 'touchstart', 'mousemove'];
+  for (const name of events) {
+    document.removeEventListener(name, handleSessionActivity);
+  }
+}
+
+function handleSessionActivity() {
+  if (loginView && !loginView.classList.contains('hidden')) return;
+  resetSessionIdleTimer(true);
+}
+
+function resetSessionIdleTimer(shouldRefresh) {
+  window.clearTimeout(sessionIdleTimer);
+  sessionIdleTimer = window.setTimeout(async () => {
+    await fetch('/api/logout', { method: 'POST', credentials: 'include' }).catch(() => null);
+    showLogin();
+    showMessage('长时间未操作，请重新登录', 'error');
+  }, sessionIdleMs);
+
+  if (!shouldRefresh) return;
+  const now = Date.now();
+  if (now - sessionLastRefreshAt < sessionRefreshIntervalMs) return;
+  sessionLastRefreshAt = now;
+  fetch('/api/me', { credentials: 'include' }).then(response => {
+    if (response.status === 401) {
+      showLogin();
+      showMessage('登录已过期，请重新登录', 'error');
+    }
+  }).catch(() => null);
 }
 
 async function requestJson(path, options = {}) {

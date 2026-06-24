@@ -36,6 +36,7 @@ STORAGE_DRIVER=d1
 IMAGE_STORAGE_DRIVER=r2
 IMAGE_MAX_SIZE_MB=10
 IMAGE_KEY_PREFIX=review-images
+SESSION_IDLE_MINUTES=120
 ```
 
 Secrets：
@@ -44,6 +45,8 @@ Secrets：
 ADMIN_PASSWORD=你的后台强密码
 SESSION_SECRET=一串较长随机字符串
 ```
+
+其中 `SESSION_IDLE_MINUTES` 是后台登录空闲超时时间，单位分钟。比如 `120` 表示当前浏览器 120 分钟无操作后需要重新登录；换浏览器访问也需要重新输入密码。
 
 配置完成后，必须重新部署一次：
 

@@ -39,11 +39,24 @@ function getAdminUsername(env) {
   return String(env.ADMIN_USERNAME || 'admin');
 }
 
+function getSessionIdleSeconds(env) {
+  const raw = Number(env.SESSION_IDLE_MINUTES || env.SESSION_TIMEOUT_MINUTES || 120);
+  if (!Number.isFinite(raw) || raw <= 0) return 120 * 60;
+  const minutes = Math.max(1, Math.min(Math.floor(raw), 43200));
+  return minutes * 60;
+}
+
 async function createToken(env, username) {
   const secret = env.SESSION_SECRET || env.ADMIN_PASSWORD;
-  const payload = base64UrlEncode(JSON.stringify({ user: username, exp: Date.now() + 24 * 60 * 60 * 1000 }));
+  const now = Date.now();
+  const idleSeconds = getSessionIdleSeconds(env);
+  const payload = base64UrlEncode(JSON.stringify({
+    user: username,
+    iat: now,
+    exp: now + idleSeconds * 1000
+  }));
   const signature = await hmac(payload, secret);
-  return `${payload}.${signature}`;
+  return { token: `${payload}.${signature}`, maxAge: idleSeconds };
 }
 
 export async function onRequestPost({ request, env }) {
@@ -64,10 +77,10 @@ export async function onRequestPost({ request, env }) {
     return json({ ok: false, message: '账号或密码错误' }, 401);
   }
 
-  const token = await createToken(env, expectedUsername);
+  const { token, maxAge } = await createToken(env, expectedUsername);
   const url = new URL(request.url);
   const secure = url.protocol === 'https:' ? '; Secure' : '';
-  return json({ ok: true }, 200, {
-    'Set-Cookie': `session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400${secure}`
+  return json({ ok: true, idle_minutes: Math.round(maxAge / 60) }, 200, {
+    'Set-Cookie': `session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${secure}`
   });
 }
