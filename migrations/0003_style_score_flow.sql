@@ -1,3 +1,4 @@
+-- 如果你已经部署过旧版系统，只需要在原 D1 数据库执行本文件，新增“后台配置款式、前端评分”需要的表。
 CREATE TABLE IF NOT EXISTS review_styles (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   product_image TEXT,
@@ -56,9 +57,3 @@ CREATE TABLE IF NOT EXISTS review_score_history (
 );
 
 CREATE INDEX IF NOT EXISTS idx_review_score_history_score_id ON review_score_history(score_id);
-
-CREATE TABLE IF NOT EXISTS app_settings (
-  key TEXT PRIMARY KEY,
-  value TEXT NOT NULL,
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);

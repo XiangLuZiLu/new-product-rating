@@ -1,13 +1,6 @@
-CREATE TABLE IF NOT EXISTS app_settings (
-  key TEXT PRIMARY KEY,
-  value TEXT NOT NULL,
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-INSERT INTO app_settings (key, value)
-VALUES ('score_page_count', '3')
-ON CONFLICT(key) DO NOTHING;
-
+-- 新增“自定义评分项”支持：评分项由后台配置，评分结果用 JSON 保存每个评分项明细。
+-- 如果 ALTER TABLE 提示 duplicate column name，说明你已经执行过本升级，可忽略该条错误。
+ALTER TABLE review_scores ADD COLUMN score_items_json TEXT;
 
 INSERT INTO app_settings (key, value, updated_at)
 VALUES (

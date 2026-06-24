@@ -93,7 +93,7 @@ export async function onRequest(context) {
   const url = new URL(request.url);
 
   if (request.method === 'OPTIONS') return next();
-  if (url.pathname === '/api/login' || url.pathname === '/api/logout') return next();
+  if (url.pathname === '/api/login' || url.pathname === '/api/logout' || url.pathname.startsWith('/api/public/')) return next();
 
   const session = await verifySession(request, env);
   if (!session) return json({ ok: false, message: '未登录或登录已过期' }, 401);

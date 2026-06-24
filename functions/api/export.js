@@ -1,29 +1,52 @@
 import { getStorage } from '../_shared/storage.js';
 
-function csvEscape(value) {
-  if (value === null || value === undefined) return '';
-  const s = String(value);
-  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+function csvCell(value) {
+  const text = String(value ?? '');
+  if (/[",\n\r]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
+  return text;
 }
 
-export async function onRequestGet({ env }) {
+export async function onRequestGet({ request, env }) {
   try {
-    const results = await getStorage(env).listItems({ limit: '5000' });
-    const headers = ['评审日期', '评审人', '款式编码', '季节', '基本售价', '外观设计', '材质触感', '工艺细节', '容量收纳', '背负舒适度', '总分', '等级', '备注', '产品图', '创建时间', '更新时间'];
-    const keys = ['review_date', 'reviewer', 'style_code', 'season', 'base_price', 'appearance_score', 'material_score', 'craftsmanship_score', 'capacity_score', 'comfort_score', 'total_score', 'grade', 'remark', 'product_image', 'created_at', 'updated_at'];
-    const lines = [headers.map(csvEscape).join(',')];
-    for (const row of results || []) lines.push(keys.map(k => csvEscape(row[k])).join(','));
-    const csv = '\ufeff' + lines.join('\n');
-    return new Response(csv, {
+    const url = new URL(request.url);
+    const storage = getStorage(env);
+    const scores = await storage.listScores({
+      search: url.searchParams.get('search') || '',
+      date_from: url.searchParams.get('date_from') || '',
+      date_to: url.searchParams.get('date_to') || '',
+      limit: '10000'
+    });
+    const scoreLabels = [];
+    for (const score of scores) {
+      for (const item of score.score_items || []) {
+        if (!scoreLabels.includes(item.label)) scoreLabels.push(item.label);
+      }
+    }
+    const headers = ['产品图', '款式编码', '季节', '基本售价', ...scoreLabels, '总分', '等级', '评分人', '评分日期', '备注', '创建时间'];
+    const rows = scores.map(score => {
+      const values = Object.fromEntries((score.score_items || []).map(item => [item.label, item.score]));
+      return [
+        score.product_image,
+        score.style_code,
+        score.season,
+        score.base_price,
+        ...scoreLabels.map(label => values[label] ?? ''),
+        score.total_score,
+        score.grade,
+        score.reviewer,
+        score.review_date,
+        score.remark,
+        score.created_at
+      ];
+    });
+    const csv = [headers, ...rows].map(row => row.map(csvCell).join(',')).join('\n');
+    return new Response('\ufeff' + csv, {
       headers: {
         'content-type': 'text/csv; charset=utf-8',
-        'content-disposition': 'attachment; filename="product-review.csv"'
+        'content-disposition': 'attachment; filename="review-scores.csv"'
       }
     });
   } catch (e) {
-    return new Response(JSON.stringify({ ok: false, message: e.message || '导出失败' }), {
-      status: e.status || 500,
-      headers: { 'content-type': 'application/json; charset=utf-8' }
-    });
+    return new Response(e.message || '导出失败', { status: 500 });
   }
 }

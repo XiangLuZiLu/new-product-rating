@@ -3,23 +3,77 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>新品评审评分系统</title>
+  <title>新品评审评分</title>
   <link rel="stylesheet" href="/assets/style.css" />
 </head>
 <body>
   <div class="page-bg"></div>
-  <main class="container">
-    <section class="login-card card public-card">
+  <main class="container public-container">
+    <header class="topbar public-topbar">
+      <div>
+        <h1>新品评审评分</h1>
+        <p>50-40分大单，40-30分中单，30-20分小单试水，20分以下建议不下</p>
+      </div>
+    </header>
+
+    <div id="message" class="message hidden"></div>
+
+    <section id="nameView" class="login-card card">
       <div class="brand">
         <div class="brand-mark">评</div>
         <div>
-          <h1>新品评审评分系统</h1>
-          <p>系统已部署成功。</p>
+          <h1>开始评分</h1>
+          <p>请先输入你的姓名，之后系统会按后台配置的款式逐个评分。</p>
         </div>
       </div>
-      <p class="tip">后台入口已隐藏，请通过配置的访问后缀打开，例如：<code>域名/你的后缀</code>。</p>
-      <p class="tip">页面不会提供后台按钮，避免普通用户误入后台。</p>
+      <form id="reviewerForm" class="login-form">
+        <label>
+          评分人姓名 <span class="required">*</span>
+          <input name="reviewer" placeholder="请输入你的姓名" autocomplete="name" required />
+        </label>
+        <button type="submit" class="primary full">进入评分</button>
+      </form>
+      <p class="tip">普通评分页面不需要后台账号。后台入口不会在首页显示。</p>
+    </section>
+
+    <section id="ratingView" class="card score-card hidden">
+      <div class="section-title score-title">
+        <div>
+          <h2>逐款评分</h2>
+          <p class="tip">当前款评分完整后，“下一页”才会亮起；点击下一页时会自动提交当前款评分。</p>
+        </div>
+        <div class="reviewer-pill">评分人：<strong id="reviewerNameText"></strong></div>
+      </div>
+
+      <div class="score-toolbar no-print">
+        <button id="prevSlideBtn" class="ghost" type="button">上一页</button>
+        <div class="slide-status">
+          <strong id="slideCounter">第 1 / 1 款</strong>
+          <span id="slideHint">请完成当前款评分</span>
+        </div>
+        <button id="nextSlideBtn" class="ghost" type="button" disabled>下一页</button>
+      </div>
+
+      <div id="scoreCarousel" class="score-carousel" aria-live="polite"></div>
+      <div id="slideDots" class="slide-dots no-print"></div>
+
+      <div class="page-bottom-nav no-print" role="navigation" aria-label="评分分页操作">
+        <button id="bottomPrevBtn" class="bottom-nav-btn" type="button">上一页</button>
+        <button id="bottomNextBtn" class="bottom-nav-btn primary-bottom" type="button" disabled>下一页</button>
+      </div>
+    </section>
+
+    <section id="doneView" class="login-card card hidden">
+      <div class="brand">
+        <div class="brand-mark">✓</div>
+        <div>
+          <h1>评分完成</h1>
+          <p id="doneText">本次评分已提交。</p>
+        </div>
+      </div>
+      <button id="restartBtn" type="button" class="primary full">重新评分</button>
     </section>
   </main>
+  <script src="/assets/rating.js" defer></script>
 </body>
 </html>
