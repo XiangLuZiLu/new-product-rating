@@ -349,7 +349,7 @@ function renderScoreGroupDetail(group) {
               <tbody>
                 ${group.scores.map(score => {
                   const image = score.product_image
-                    ? `<img class="photo" src="${escapeHtml(score.product_image)}" alt="产品图" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'photo-placeholder',textContent:'无图'}))">`
+                    ? `<img class="photo" src="${escapeHtml(score.product_image)}" alt="产品图" loading="lazy" referrerpolicy="no-referrer" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'photo-placeholder',textContent:'无图'}))">`
                     : '<span class="photo-placeholder">无图</span>';
                   const values = Object.fromEntries(getScoreItems(score).map(item => [item.label, `${item.score} / ${normalizeMaxScore(item.max_score)}`]));
                   return `
@@ -381,7 +381,7 @@ function renderScoreGroupDetail(group) {
 function renderStylePhoto(url, className = 'photo') {
   const safe = String(url || '').trim();
   return safe
-    ? `<img class="${className}" src="${escapeHtml(safe)}" alt="产品图" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'photo-placeholder',textContent:'无图'}))">`
+    ? `<img class="${className}" src="${escapeHtml(safe)}" alt="产品图" loading="lazy" referrerpolicy="no-referrer" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'photo-placeholder',textContent:'无图'}))">`
     : '<span class="photo-placeholder">无图</span>';
 }
 function renderInlineStyleRow(style) {
@@ -510,7 +510,7 @@ function setImagePreview(url) {
   const safe = String(url || '').trim();
   styleForm.elements.product_image.value = safe;
   if (styleForm.elements.product_image_url) styleForm.elements.product_image_url.value = safe;
-  stylePreview.innerHTML = safe ? `<img class="image-preview" src="${escapeHtml(safe)}" alt="产品图预览" />` : '<span>拖拽图片到这里，或点击选择图片</span>';
+  stylePreview.innerHTML = safe ? `<img class="image-preview" src="${escapeHtml(safe)}" alt="产品图预览" loading="lazy" referrerpolicy="no-referrer" />` : '<span>拖拽图片到这里，或点击选择图片</span>';
 }
 function resetStyleForm() {
   editingStyleId = null;

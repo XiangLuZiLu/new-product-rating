@@ -165,7 +165,7 @@ function renderSlides() {
   scoreCarousel.innerHTML = styles.map((style, index) => {
     const draft = drafts[index];
     const image = style.product_image
-      ? `<img class="public-style-image" src="${escapeHtml(style.product_image)}" alt="${escapeHtml(style.style_code)}" />`
+      ? `<img class="public-style-image" src="${escapeHtml(style.product_image)}" alt="${escapeHtml(style.style_code)}" loading="lazy" referrerpolicy="no-referrer" />`
       : '<div class="public-style-image placeholder">暂无图片</div>';
     return `
       <article class="score-slide" data-index="${index}">
