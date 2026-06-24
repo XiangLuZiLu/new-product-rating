@@ -31,7 +31,6 @@ let styles = [];
 let scores = [];
 let scoreFields = [];
 let editingStyleId = null;
-let inlineEditingStyleId = null;
 let editingScoreId = null;
 let editingScoreMeta = null;
 let sessionGuardStarted = false;
@@ -233,57 +232,6 @@ function getScoreItems(score) {
   if (Array.isArray(score?.score_items) && score.score_items.length) return score.score_items;
   return scoreFields.map(field => ({ id: field.id, label: field.label, max_score: normalizeMaxScore(field.max_score), score: Number(score?.[field.id] || 0) }));
 }
-function renderStylePhoto(url, className = 'photo') {
-  const safe = String(url || '').trim();
-  return safe
-    ? `<img class="${className}" src="${escapeHtml(safe)}" alt="产品图" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'photo-placeholder',textContent:'无图'}))">`
-    : '<span class="photo-placeholder">无图</span>';
-}
-function renderInlineStyleRow(style) {
-  const activeChecked = Number(style.active ?? 1) === 1 ? 'checked' : '';
-  return `
-    <tr class="style-inline-edit-row" data-style-edit-id="${escapeHtml(style.id)}">
-      <td>
-        <div class="inline-image-editor">
-          <div data-inline-image-preview>${renderStylePhoto(style.product_image, 'photo inline-photo')}</div>
-          <input class="visually-hidden" data-inline-image-file type="file" accept="image/*" />
-          <button class="ghost mini-btn" type="button" data-style-action="inline-upload" data-id="${escapeHtml(style.id)}">换图</button>
-          <input class="inline-style-input image-url-input" data-inline-field="product_image" value="${escapeHtml(style.product_image || '')}" placeholder="图片链接" />
-        </div>
-      </td>
-      <td><input class="inline-style-input" data-inline-field="style_code" value="${escapeHtml(style.style_code || '')}" placeholder="款式编码" required /></td>
-      <td><input class="inline-style-input" data-inline-field="season" value="${escapeHtml(style.season || '')}" placeholder="季节" /></td>
-      <td><input class="inline-style-input" data-inline-field="base_price" type="number" min="0" step="0.01" value="${escapeHtml(style.base_price ?? '')}" placeholder="售价" /></td>
-      <td><label class="inline-switch"><input data-inline-field="active" type="checkbox" ${activeChecked} /> <span>启用</span></label></td>
-      <td><textarea class="inline-style-input inline-remark" data-inline-field="style_remark" rows="2" placeholder="款式备注">${escapeHtml(style.style_remark || '')}</textarea></td>
-      <td>${escapeHtml(style.created_at || '')}</td>
-      <td class="no-print"><div class="actions inline-actions">
-        <button class="primary" type="button" data-style-action="save-edit" data-id="${escapeHtml(style.id)}">保存</button>
-        <button class="ghost" type="button" data-style-action="cancel-edit" data-id="${escapeHtml(style.id)}">取消</button>
-        <button class="danger-light" type="button" data-style-action="delete" data-id="${escapeHtml(style.id)}">删除</button>
-      </div></td>
-    </tr>
-  `;
-}
-function readInlineStylePayload(row) {
-  const field = (name) => row.querySelector(`[data-inline-field="${name}"]`);
-  const code = field('style_code')?.value?.trim() || '';
-  if (!code) throw new Error('款式编码不能为空');
-  return {
-    product_image: field('product_image')?.value?.trim() || '',
-    style_code: code,
-    season: field('season')?.value?.trim() || '',
-    base_price: field('base_price')?.value || '',
-    active: field('active')?.checked ? 1 : 0,
-    style_remark: field('style_remark')?.value?.trim() || ''
-  };
-}
-function updateInlineImagePreview(row, url) {
-  const preview = row.querySelector('[data-inline-image-preview]');
-  const input = row.querySelector('[data-inline-field="product_image"]');
-  if (input) input.value = String(url || '').trim();
-  if (preview) preview.innerHTML = renderStylePhoto(url, 'photo inline-photo');
-}
 function renderStyles() {
   renderStats();
   if (!styles.length) {
@@ -291,8 +239,9 @@ function renderStyles() {
     return;
   }
   stylesBody.innerHTML = styles.map(style => {
-    if (String(inlineEditingStyleId || '') === String(style.id)) return renderInlineStyleRow(style);
-    const image = renderStylePhoto(style.product_image);
+    const image = style.product_image
+      ? `<img class="photo" src="${escapeHtml(style.product_image)}" alt="产品图" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'photo-placeholder',textContent:'无图'}))">`
+      : '<span class="photo-placeholder">无图</span>';
     return `
       <tr>
         <td>${image}</td>
@@ -541,7 +490,7 @@ styleForm.addEventListener('submit', async (event) => {
   } catch (e) { showMessage(e.message, 'error'); }
   finally { setButtonBusy(submitBtn, false); }
 });
-cancelStyleEditBtn.addEventListener('click', () => { inlineEditingStyleId = null; resetStyleForm(); });
+cancelStyleEditBtn.addEventListener('click', resetStyleForm);
 styleSearchForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const submitBtn = event.submitter || styleSearchForm.querySelector('button[type="submit"]');
@@ -559,64 +508,11 @@ stylesBody.addEventListener('click', async (event) => {
   if (!btn) return;
   const style = styles.find(row => String(row.id) === String(btn.dataset.id));
   if (!style) return;
-  const action = btn.dataset.styleAction;
-  if (action === 'edit') {
-    resetStyleForm();
-    inlineEditingStyleId = style.id;
-    renderStyles();
-    return;
-  }
-  if (action === 'cancel-edit') {
-    inlineEditingStyleId = null;
-    renderStyles();
-    return;
-  }
-  if (action === 'inline-upload') {
-    const row = btn.closest('[data-style-edit-id]');
-    row?.querySelector('[data-inline-image-file]')?.click();
-    return;
-  }
-  if (action === 'save-edit') {
-    const row = btn.closest('[data-style-edit-id]');
-    if (!row) return;
-    setButtonBusy(btn, true, '保存中...');
-    try {
-      const payload = readInlineStylePayload(row);
-      await requestJson(`/api/styles/${encodeURIComponent(style.id)}`, {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json; charset=utf-8' },
-        body: JSON.stringify(payload)
-      });
-      showMessage('款式已更新');
-      inlineEditingStyleId = null;
-      await loadStyles();
-    } catch(e) { showMessage(e.message, 'error'); }
-    finally { setButtonBusy(btn, false); }
-    return;
-  }
-  if (action === 'delete') {
+  if (btn.dataset.styleAction === 'edit') fillStyleForm(style);
+  if (btn.dataset.styleAction === 'delete') {
     if (!confirm(`确定删除款式 ${style.style_code} 吗？已产生的评分记录不会删除。`)) return;
-    try { await requestJson(`/api/styles/${encodeURIComponent(style.id)}`, { method: 'DELETE' }); showMessage('款式已删除'); inlineEditingStyleId = null; await loadStyles(); } catch(e) { showMessage(e.message, 'error'); }
+    try { await requestJson(`/api/styles/${encodeURIComponent(style.id)}`, { method: 'DELETE' }); showMessage('款式已删除'); await loadStyles(); } catch(e) { showMessage(e.message, 'error'); }
   }
-});
-stylesBody.addEventListener('change', async (event) => {
-  const fileInput = event.target.closest('[data-inline-image-file]');
-  if (!fileInput) return;
-  const row = fileInput.closest('[data-style-edit-id]');
-  const file = fileInput.files?.[0];
-  if (!row || !file) return;
-  try {
-    const url = await uploadImageFile(file);
-    updateInlineImagePreview(row, url);
-    showMessage('图片已上传，点击保存后生效');
-  } catch(e) { showMessage(e.message, 'error'); }
-  finally { fileInput.value = ''; }
-});
-stylesBody.addEventListener('input', (event) => {
-  const imageInput = event.target.closest('[data-inline-field="product_image"]');
-  if (!imageInput) return;
-  const row = imageInput.closest('[data-style-edit-id]');
-  if (row) updateInlineImagePreview(row, imageInput.value.trim());
 });
 
 scoreSearchForm.addEventListener('submit', async (event) => {
