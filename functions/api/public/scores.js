@@ -3,9 +3,6 @@ import { getStorage, normalizeScorePayload } from '../../_shared/storage.js';
 function nowDateTime() { return new Date().toISOString().replace('T', ' ').slice(0, 19); }
 function newSubmissionId() { return (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') ? globalThis.crypto.randomUUID() : `submission_${Date.now()}_${Math.random().toString(36).slice(2)}`; }
 
-function nowDateTime() { return new Date().toISOString().replace('T', ' ').slice(0, 19); }
-function newSubmissionId() { return (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') ? globalThis.crypto.randomUUID() : `submission_${Date.now()}_${Math.random().toString(36).slice(2)}`; }
-
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8' } });
 }
