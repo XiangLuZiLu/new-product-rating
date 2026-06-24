@@ -1,9 +1,9 @@
 export const DEFAULT_SCORE_FIELDS = [
-  { id: 'appearance', key: 'appearance_score', label: '外观设计' },
-  { id: 'material', key: 'material_score', label: '材质触感' },
-  { id: 'craftsmanship', key: 'craftsmanship_score', label: '工艺细节' },
-  { id: 'capacity', key: 'capacity_score', label: '容量收纳' },
-  { id: 'comfort', key: 'comfort_score', label: '背负舒适度' }
+  { id: 'appearance', key: 'appearance_score', label: '外观设计', max_score: 10 },
+  { id: 'material', key: 'material_score', label: '材质触感', max_score: 10 },
+  { id: 'craftsmanship', key: 'craftsmanship_score', label: '工艺细节', max_score: 10 },
+  { id: 'capacity', key: 'capacity_score', label: '容量收纳', max_score: 10 },
+  { id: 'comfort', key: 'comfort_score', label: '背负舒适度', max_score: 10 }
 ];
 
 const LEGACY_KEYS = DEFAULT_SCORE_FIELDS.map(item => item.key);
@@ -11,10 +11,12 @@ const LEGACY_KEY_BY_ID = Object.fromEntries(DEFAULT_SCORE_FIELDS.map(item => [it
 const LEGACY_ID_BY_KEY = Object.fromEntries(DEFAULT_SCORE_FIELDS.map(item => [item.key, item.id]));
 const LEGACY_LABEL_BY_ID = Object.fromEntries(DEFAULT_SCORE_FIELDS.map(item => [item.id, item.label]));
 
-export function gradeByScore(total) {
-  if (total >= 40) return '大单';
-  if (total >= 30) return '中单';
-  if (total >= 20) return '小单试水';
+export function gradeByScore(total, maxTotal = 50) {
+  const max = Number(maxTotal);
+  const rate = Number.isFinite(max) && max > 0 ? Number(total || 0) / max : 0;
+  if (rate >= 0.8) return '大单';
+  if (rate >= 0.6) return '中单';
+  if (rate >= 0.4) return '小单试水';
   return '建议不下';
 }
 
@@ -28,16 +30,21 @@ function toIntId(value, label = 'ID') {
   return n;
 }
 
-function toScore(value, label) {
+function normalizeMaxScore(value) {
+  const n = Number.parseInt(value ?? 10, 10);
+  if (!Number.isFinite(n) || n <= 0) return 10;
+  return Math.max(1, Math.min(100, n));
+}
+
+function toScore(value, label, maxScore = 10) {
+  const max = normalizeMaxScore(maxScore);
   const n = Number(value ?? 0);
-  if (!Number.isInteger(n) || n < 0 || n > 10) throw new Error(`${label} 必须是 0-10 的整数`);
+  if (!Number.isInteger(n) || n < 0 || n > max) throw new Error(`${label} 必须是 0-${max} 的整数`);
   return n;
 }
 
-function toRequiredScore(value, label) {
-  const n = toScore(value, label);
-  if (n <= 0) throw new Error(`${label} 不能为空，请滑动评分`);
-  return n;
+function toRequiredScore(value, label, maxScore = 10) {
+  return toScore(value, label, maxScore);
 }
 
 function toPrice(value) {
@@ -83,10 +90,11 @@ export function normalizeScoreFields(value) {
     const base = id;
     while (used.has(id)) id = `${base}_${suffix++}`;
     used.add(id);
-    fields.push({ id, label });
+    const max_score = normalizeMaxScore(item.max_score ?? item.maxScore ?? item.max ?? item.score_max ?? 10);
+    fields.push({ id, label, max_score });
     if (fields.length >= 20) break;
   }
-  return fields.length ? fields : DEFAULT_SCORE_FIELDS.map(({ id, label }) => ({ id, label }));
+  return fields.length ? fields : DEFAULT_SCORE_FIELDS.map(({ id, label, max_score }) => ({ id, label, max_score }));
 }
 
 export function normalizeStylePayload(payload = {}) {
@@ -114,10 +122,12 @@ function getScoreValueFromPayload(payload, field) {
 }
 
 function fieldsFromPayloadOrDefault(payload, scoreFields) {
+  const configured = normalizeScoreFields(scoreFields);
+  if (configured.length) return configured;
   if (Array.isArray(payload.score_items) && payload.score_items.length) {
-    return normalizeScoreFields(payload.score_items.map(item => ({ id: item.id, label: item.label || item.name })));
+    return normalizeScoreFields(payload.score_items.map(item => ({ id: item.id, label: item.label || item.name, max_score: item.max_score ?? item.maxScore ?? item.max })));
   }
-  return normalizeScoreFields(scoreFields);
+  return configured;
 }
 
 export function normalizeScorePayload(payload = {}, scoreFields = DEFAULT_SCORE_FIELDS) {
@@ -132,16 +142,19 @@ export function normalizeScorePayload(payload = {}, scoreFields = DEFAULT_SCORE_
   if (!/^\d{4}-\d{2}-\d{2}$/.test(data.review_date)) throw new Error('评审日期格式应为 YYYY-MM-DD');
 
   let total = 0;
+  let maxTotal = 0;
   const payloadItemsById = new Map((Array.isArray(payload.score_items) ? payload.score_items : []).map(item => [String(item.id || ''), item]));
   data.score_items = fields.map(field => {
     const source = payloadItemsById.get(field.id) || field;
-    const score = toRequiredScore(getScoreValueFromPayload(payload, { ...field, score: source.score }), field.label);
+    const max_score = normalizeMaxScore(field.max_score);
+    const score = toRequiredScore(getScoreValueFromPayload(payload, { ...field, score: source.score }), field.label, max_score);
     total += score;
-    return { id: field.id, label: field.label, score };
+    maxTotal += max_score;
+    return { id: field.id, label: field.label, score, max_score };
   });
   data.score_items_json = JSON.stringify(data.score_items);
   data.total_score = total;
-  data.grade = gradeByScore(total);
+  data.grade = gradeByScore(total, maxTotal);
 
   const legacy = legacyScoresFromItems(data.score_items);
   Object.assign(data, legacy);
@@ -191,14 +204,15 @@ function parseScoreItems(row, fallbackFields = DEFAULT_SCORE_FIELDS) {
         return items.map((item, index) => ({
           id: makeFieldId(item.id || item.key || `field_${index + 1}`, index),
           label: String(item.label || item.name || LEGACY_LABEL_BY_ID[item.id] || `评分项${index + 1}`),
-          score: Number(item.score || 0)
+          score: Number(item.score || 0),
+          max_score: normalizeMaxScore(item.max_score ?? item.maxScore ?? item.max ?? fallbackFields[index]?.max_score)
         }));
       }
     } catch {}
   }
   return normalizeScoreFields(fallbackFields).map(field => {
     const key = LEGACY_KEY_BY_ID[field.id] || field.key;
-    return { id: field.id, label: field.label, score: key ? Number(row[key] || 0) : 0 };
+    return { id: field.id, label: field.label, score: key ? Number(row[key] || 0) : 0, max_score: normalizeMaxScore(field.max_score) };
   });
 }
 

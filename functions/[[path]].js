@@ -63,7 +63,7 @@ function adminHtml(adminPath, sessionIdleMinutes) {
           <div class="section-title">
             <div>
               <h2>评分项配置</h2>
-              <p class="tip">这里可以自定义前端要评分的项目，例如外观设计、材质触感；可新增、删除或减少。每项仍为 0-10 分。</p>
+              <p class="tip">这里可以自定义前端要评分的项目和每项满分，例如外观设计 10 分、材质触感 20 分，也可以设置为 100 分。</p>
             </div>
             <div class="form-actions">
               <button id="addScoreFieldBtn" class="ghost" type="button">新增评分项</button>
@@ -100,7 +100,7 @@ function adminHtml(adminPath, sessionIdleMinutes) {
           <label class="season-field">季节<input name="season" placeholder="例如 秋冬 / 春夏" /></label>
           <label class="price-field">基本售价<input name="base_price" type="number" min="0" step="0.01" placeholder="例如 138" /></label>
           <label class="switch-label"><span>启用评分</span><input name="active" type="checkbox" checked /></label>
-          <label class="wide">款式备注<textarea name="style_remark" rows="3" placeholder="可填写材质、颜色、版型等说明，评分人员会看到"></textarea></label>
+          <label class="style-remark-field">款式备注<textarea name="style_remark" rows="2" placeholder="可填写材质、颜色、版型等说明"></textarea></label>
           <div class="form-actions wide">
             <button class="primary" type="submit">保存款式</button>
             <button id="cancelStyleEditBtn" class="ghost hidden" type="button">取消编辑</button>

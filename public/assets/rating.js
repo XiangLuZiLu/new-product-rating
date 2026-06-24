@@ -19,11 +19,11 @@ const doneText = $('#doneText');
 const restartBtn = $('#restartBtn');
 
 const defaultScoreFields = [
-  { id: 'appearance', label: '外观设计' },
-  { id: 'material', label: '材质触感' },
-  { id: 'craftsmanship', label: '工艺细节' },
-  { id: 'capacity', label: '容量收纳' },
-  { id: 'comfort', label: '背负舒适度' }
+  { id: 'appearance', label: '外观设计', max_score: 10 },
+  { id: 'material', label: '材质触感', max_score: 10 },
+  { id: 'craftsmanship', label: '工艺细节', max_score: 10 },
+  { id: 'capacity', label: '容量收纳', max_score: 10 },
+  { id: 'comfort', label: '背负舒适度', max_score: 10 }
 ];
 
 let scoreFields = defaultScoreFields.map(item => ({ ...item }));
@@ -47,11 +47,18 @@ function escapeHtml(text) {
     .replace(/'/g, '&#39;');
 }
 
+function normalizeMaxScore(value) {
+  const n = Number.parseInt(value ?? 10, 10);
+  if (!Number.isFinite(n) || n <= 0) return 10;
+  return Math.max(1, Math.min(100, n));
+}
+
 function normalizeScoreFields(fields) {
   if (!Array.isArray(fields)) return defaultScoreFields.map(item => ({ ...item }));
   const normalized = fields.map((field, index) => ({
     id: String(field.id || `field_${index + 1}`).trim() || `field_${index + 1}`,
-    label: String(field.label || '').trim()
+    label: String(field.label || '').trim(),
+    max_score: normalizeMaxScore(field.max_score ?? field.maxScore ?? field.max ?? field.score_max ?? 10)
   })).filter(field => field.label);
   return normalized.length ? normalized : defaultScoreFields.map(item => ({ ...item }));
 }
@@ -64,10 +71,12 @@ function showMessage(text, type = 'success') {
   showMessage.timer = window.setTimeout(() => messageBox.classList.add('hidden'), 3600);
 }
 
-function gradeByScore(total) {
-  if (total >= 40) return '大单';
-  if (total >= 30) return '中单';
-  if (total >= 20) return '小单试水';
+function gradeByScore(total, maxTotal = 50) {
+  const max = Number(maxTotal);
+  const rate = Number.isFinite(max) && max > 0 ? Number(total || 0) / max : 0;
+  if (rate >= 0.8) return '大单';
+  if (rate >= 0.6) return '中单';
+  if (rate >= 0.4) return '小单试水';
   return '建议不下';
 }
 
@@ -80,8 +89,10 @@ function makeDraft(style) {
     submitted: false,
     score_id: null,
     scores: Object.fromEntries(scoreFields.map(field => [field.id, 0])),
+    touched_scores: Object.fromEntries(scoreFields.map(field => [field.id, false])),
     total_score: 0,
-    grade: gradeByScore(0)
+    max_total_score: scoreFields.reduce((sum, field) => sum + normalizeMaxScore(field.max_score), 0),
+    grade: gradeByScore(0, scoreFields.reduce((sum, field) => sum + normalizeMaxScore(field.max_score), 0))
   };
 }
 
@@ -89,19 +100,23 @@ function calculate(index) {
   const draft = drafts[index];
   if (!draft) return;
   let total = 0;
+  let maxTotal = 0;
   for (const field of scoreFields) {
-    const value = Math.min(10, Math.max(0, Number.parseInt(draft.scores?.[field.id], 10) || 0));
+    const max = normalizeMaxScore(field.max_score);
+    const value = Math.min(max, Math.max(0, Number.parseInt(draft.scores?.[field.id], 10) || 0));
     draft.scores[field.id] = value;
     total += value;
+    maxTotal += max;
   }
   draft.total_score = total;
-  draft.grade = gradeByScore(total);
+  draft.max_total_score = maxTotal;
+  draft.grade = gradeByScore(total, maxTotal);
 }
 
 function missingFields(draft) {
   const missing = [];
-  const noScore = scoreFields.filter(field => Number(draft?.scores?.[field.id] || 0) <= 0).map(field => field.label);
-  if (noScore.length) missing.push(`${noScore.length} 个评分项`);
+  const untouched = scoreFields.filter(field => !draft?.touched_scores?.[field.id]).map(field => field.label);
+  if (untouched.length) missing.push(`${untouched.length} 个评分项`);
   return missing;
 }
 
@@ -172,17 +187,17 @@ function renderSlides() {
           </div>
 
           <fieldset class="mobile-score-panel">
-            <legend>滑动评分，每项 0-10 分 <span class="required">*</span></legend>
+            <legend>滑动评分，按后台设置满分 <span class="required">*</span></legend>
             ${scoreFields.map(field => `
               <label class="score-row">
                 <span>${escapeHtml(field.label)}</span>
-                <input data-field="${escapeHtml(field.id)}" type="range" min="0" max="10" step="1" value="${Number(draft.scores[field.id] || 0)}" ${draft.submitted ? 'disabled' : ''} />
-                <output>${Number(draft.scores[field.id] || 0)}</output>
+                <input data-field="${escapeHtml(field.id)}" type="range" min="0" max="${normalizeMaxScore(field.max_score)}" step="1" value="${Number(draft.scores[field.id] || 0)}" ${draft.submitted ? 'disabled' : ''} />
+                <output>${Number(draft.scores[field.id] || 0)} / ${normalizeMaxScore(field.max_score)}</output>
               </label>
             `).join('')}
             <div class="total-box">
               <span>总分</span>
-              <strong data-role="total">${draft.total_score}</strong>
+              <strong data-role="total">${draft.total_score} / ${draft.max_total_score}</strong>
               <em data-role="grade">${draft.grade}</em>
             </div>
           </fieldset>
@@ -211,7 +226,7 @@ function updateSlideTotal(index) {
   calculate(index);
   const slide = scoreCarousel.querySelector(`.score-slide[data-index="${index}"]`);
   if (!slide) return;
-  slide.querySelector('[data-role="total"]').textContent = drafts[index].total_score;
+  slide.querySelector('[data-role="total"]').textContent = `${drafts[index].total_score} / ${drafts[index].max_total_score}`;
   slide.querySelector('[data-role="grade"]').textContent = drafts[index].grade;
 }
 
@@ -286,7 +301,7 @@ async function submitCurrentAndNext() {
         style_id: styles[currentIndex].id,
         review_date: today(),
         remark: draft.remark,
-        score_items: scoreFields.map(field => ({ id: field.id, label: field.label, score: Number(draft.scores[field.id] || 0) }))
+        score_items: scoreFields.map(field => ({ id: field.id, label: field.label, max_score: normalizeMaxScore(field.max_score), score: Number(draft.scores[field.id] || 0) }))
       };
       const data = await requestJson('/api/public/scores', {
         method: 'POST',
@@ -328,6 +343,29 @@ reviewerForm.addEventListener('submit', async (event) => {
   }
 });
 
+
+scoreCarousel.addEventListener('pointerdown', (event) => {
+  const input = event.target.closest('input[type="range"][data-field]');
+  if (!input) return;
+  const slide = input.closest('.score-slide');
+  const index = Number(slide.dataset.index);
+  if (drafts[index]) {
+    drafts[index].touched_scores[input.dataset.field] = true;
+    if (index === currentIndex) updateStatus();
+  }
+});
+
+scoreCarousel.addEventListener('change', (event) => {
+  const input = event.target.closest('input[type="range"][data-field]');
+  if (!input) return;
+  const slide = input.closest('.score-slide');
+  const index = Number(slide.dataset.index);
+  if (drafts[index]) {
+    drafts[index].touched_scores[input.dataset.field] = true;
+    if (index === currentIndex) updateStatus();
+  }
+});
+
 scoreCarousel.addEventListener('input', (event) => {
   const input = event.target.closest('[data-field]');
   if (!input) return;
@@ -337,7 +375,8 @@ scoreCarousel.addEventListener('input', (event) => {
     drafts[index].remark = input.value;
   } else {
     drafts[index].scores[input.dataset.field] = Number(input.value || 0);
-    input.nextElementSibling.textContent = input.value;
+    drafts[index].touched_scores[input.dataset.field] = true;
+    input.nextElementSibling.textContent = `${input.value} / ${input.max}`;
     updateSlideTotal(index);
   }
   if (index === currentIndex) updateStatus();

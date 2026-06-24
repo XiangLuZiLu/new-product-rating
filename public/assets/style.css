@@ -926,3 +926,57 @@ button.disabled {
   .score-field-editor-row { grid-template-columns: 36px minmax(0, 1fr); }
   .score-field-editor-row button { grid-column: 2; justify-self: stretch; }
 }
+
+/* 2026-06: 后台表单布局二次调整：图片独占一行，款式资料压缩到同一行 */
+.admin-style-form {
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  align-items: stretch;
+}
+.admin-style-form .image-field { grid-column: 1 / -1 !important; }
+.admin-style-form .style-code-field { grid-column: span 3 !important; }
+.admin-style-form .season-field { grid-column: span 2 !important; }
+.admin-style-form .price-field { grid-column: span 2 !important; }
+.admin-style-form .switch-label { grid-column: span 2 !important; min-height: 78px; }
+.admin-style-form .style-remark-field { grid-column: span 3 !important; }
+.admin-style-form .form-actions.wide { grid-column: 1 / -1 !important; }
+.admin-style-form .style-remark-field textarea { min-height: 78px; resize: vertical; }
+
+/* 评分项配置压缩，并支持每项满分 */
+.score-field-list { gap: 8px; }
+.score-field-editor-row {
+  grid-template-columns: 36px minmax(180px, 1fr) 128px auto;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 12px;
+}
+.score-field-editor-row input { min-height: 40px; }
+.score-field-order { width: 30px; height: 30px; }
+.score-max-editor {
+  display: grid;
+  grid-template-columns: auto minmax(56px, 1fr);
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+.score-max-editor input { padding: 8px 10px; text-align: center; }
+
+@media (max-width: 1080px) {
+  .admin-style-form .style-code-field { grid-column: span 4 !important; }
+  .admin-style-form .season-field,
+  .admin-style-form .price-field,
+  .admin-style-form .switch-label,
+  .admin-style-form .style-remark-field { grid-column: span 4 !important; }
+}
+
+@media (max-width: 720px) {
+  .admin-style-form .style-code-field,
+  .admin-style-form .season-field,
+  .admin-style-form .price-field,
+  .admin-style-form .switch-label,
+  .admin-style-form .style-remark-field { grid-column: 1 / -1 !important; }
+  .score-field-editor-row { grid-template-columns: 32px minmax(0, 1fr); }
+  .score-max-editor, .score-field-editor-row button { grid-column: 2; }
+}

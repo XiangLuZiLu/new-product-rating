@@ -67,11 +67,11 @@ document.addEventListener('click', (event) => {
 }, { passive: true });
 
 const defaultScoreFields = [
-  { id: 'appearance', label: '外观设计' },
-  { id: 'material', label: '材质触感' },
-  { id: 'craftsmanship', label: '工艺细节' },
-  { id: 'capacity', label: '容量收纳' },
-  { id: 'comfort', label: '背负舒适度' }
+  { id: 'appearance', label: '外观设计', max_score: 10 },
+  { id: 'material', label: '材质触感', max_score: 10 },
+  { id: 'craftsmanship', label: '工艺细节', max_score: 10 },
+  { id: 'capacity', label: '容量收纳', max_score: 10 },
+  { id: 'comfort', label: '背负舒适度', max_score: 10 }
 ];
 
 function today() { return new Date().toISOString().slice(0, 10); }
@@ -83,10 +83,17 @@ function escapeHtml(text) {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 }
-function gradeByScore(total) {
-  if (total >= 40) return '大单';
-  if (total >= 30) return '中单';
-  if (total >= 20) return '小单试水';
+function normalizeMaxScore(value) {
+  const n = Number.parseInt(value ?? 10, 10);
+  if (!Number.isFinite(n) || n <= 0) return 10;
+  return Math.max(1, Math.min(100, n));
+}
+function gradeByScore(total, maxTotal = 50) {
+  const max = Number(maxTotal);
+  const rate = Number.isFinite(max) && max > 0 ? Number(total || 0) / max : 0;
+  if (rate >= 0.8) return '大单';
+  if (rate >= 0.6) return '中单';
+  if (rate >= 0.4) return '小单试水';
   return '建议不下';
 }
 function formatMoney(value) {
@@ -111,7 +118,7 @@ function normalizeScoreFieldsLocal(fields) {
     const base = id;
     while (used.has(id)) id = `${base}_${suffix++}`;
     used.add(id);
-    return { id, label };
+    return { id, label, max_score: normalizeMaxScore(field.max_score ?? field.maxScore ?? field.max ?? field.score_max ?? 10) };
   }).filter(Boolean);
   return normalized.length ? normalized : defaultScoreFields.map(item => ({ ...item }));
 }
@@ -205,7 +212,8 @@ function renderScoreFieldEditor() {
   scoreFieldList.innerHTML = scoreFields.map((field, index) => `
     <div class="score-field-editor-row" data-index="${index}" data-id="${escapeHtml(field.id)}">
       <span class="score-field-order">${index + 1}</span>
-      <input data-score-field-label value="${escapeHtml(field.label)}" placeholder="评分项名称，例如 外观设计" />
+      <input data-score-field-label value="${escapeHtml(field.label)}" placeholder="评分项名称" />
+      <label class="score-max-editor"><span>满分</span><input data-score-field-max type="number" min="1" max="100" step="1" value="${normalizeMaxScore(field.max_score)}" /></label>
       <button class="danger-light" type="button" data-score-field-action="delete">删除</button>
     </div>
   `).join('');
@@ -214,14 +222,15 @@ function readScoreFieldsFromEditor() {
   const rows = Array.from(scoreFieldList.querySelectorAll('.score-field-editor-row'));
   const fields = rows.map((row, index) => ({
     id: row.dataset.id || makeScoreFieldId(),
-    label: row.querySelector('[data-score-field-label]')?.value?.trim() || ''
+    label: row.querySelector('[data-score-field-label]')?.value?.trim() || '',
+    max_score: normalizeMaxScore(row.querySelector('[data-score-field-max]')?.value)
   })).filter(field => field.label);
   if (!fields.length) throw new Error('至少保留 1 个评分项');
   return normalizeScoreFieldsLocal(fields);
 }
 function getScoreItems(score) {
   if (Array.isArray(score?.score_items) && score.score_items.length) return score.score_items;
-  return scoreFields.map(field => ({ id: field.id, label: field.label, score: Number(score?.[field.id] || 0) }));
+  return scoreFields.map(field => ({ id: field.id, label: field.label, max_score: normalizeMaxScore(field.max_score), score: Number(score?.[field.id] || 0) }));
 }
 function renderStyles() {
   renderStats();
@@ -341,7 +350,7 @@ function fillStyleForm(style) {
 }
 function fillScoreEditForm(score) {
   editingScoreId = score.id;
-  const items = getScoreItems(score).map(item => ({ id: item.id, label: item.label, score: Number(item.score || 0) }));
+  const items = getScoreItems(score).map(item => ({ id: item.id, label: item.label, max_score: normalizeMaxScore(item.max_score), score: Number(item.score || 0) }));
   editingScoreMeta = { style_id: score.style_id, reviewer: score.reviewer || '', review_date: score.review_date || today(), score_items: items };
   scoreEditPanel.classList.remove('hidden');
   scoreEditForm.elements.style_id.value = score.style_id || '';
@@ -352,8 +361,8 @@ function fillScoreEditForm(score) {
     ${items.map(item => `
       <label class="score-row">
         <span>${escapeHtml(item.label)}</span>
-        <input data-score-item-id="${escapeHtml(item.id)}" data-score-item-label="${escapeHtml(item.label)}" type="range" min="0" max="10" step="1" value="${Number(item.score || 0)}" />
-        <output>${Number(item.score || 0)}</output>
+        <input data-score-item-id="${escapeHtml(item.id)}" data-score-item-label="${escapeHtml(item.label)}" data-score-item-max="${normalizeMaxScore(item.max_score)}" type="range" min="0" max="${normalizeMaxScore(item.max_score)}" step="1" value="${Number(item.score || 0)}" />
+        <output>${Number(item.score || 0)} / ${normalizeMaxScore(item.max_score)}</output>
       </label>
     `).join('')}
     <div class="total-box"><span>总分</span><strong id="scoreEditTotal">0</strong><em id="scoreEditGrade">建议不下</em></div>`;
@@ -362,9 +371,13 @@ function fillScoreEditForm(score) {
 }
 function updateScoreEditTotal() {
   let total = 0;
-  scoreEditForm.querySelectorAll('[data-score-item-id]').forEach(input => { total += Number(input.value || 0); });
-  $('#scoreEditTotal').textContent = total;
-  $('#scoreEditGrade').textContent = gradeByScore(total);
+  let maxTotal = 0;
+  scoreEditForm.querySelectorAll('[data-score-item-id]').forEach(input => {
+    total += Number(input.value || 0);
+    maxTotal += normalizeMaxScore(input.dataset.scoreItemMax || input.max);
+  });
+  $('#scoreEditTotal').textContent = `${total} / ${maxTotal}`;
+  $('#scoreEditGrade').textContent = gradeByScore(total, maxTotal);
 }
 
 loginForm.addEventListener('submit', async (event) => {
@@ -393,7 +406,7 @@ logoutBtn.addEventListener('click', async () => {
 $$('.tab').forEach(tab => tab.addEventListener('click', () => setActiveTab(tab.dataset.target)));
 
 addScoreFieldBtn.addEventListener('click', () => {
-  scoreFields.push({ id: makeScoreFieldId(), label: `评分项${scoreFields.length + 1}` });
+  scoreFields.push({ id: makeScoreFieldId(), label: `评分项${scoreFields.length + 1}`, max_score: 10 });
   renderScoreFieldEditor();
 });
 scoreFieldList.addEventListener('click', (event) => {
@@ -538,7 +551,7 @@ scoresBody.addEventListener('click', async (event) => {
 scoreEditForm.addEventListener('input', (event) => {
   const range = event.target.closest('[data-score-item-id]');
   if (!range) return;
-  range.nextElementSibling.textContent = range.value;
+  range.nextElementSibling.textContent = `${range.value} / ${range.max}`;
   updateScoreEditTotal();
 });
 scoreEditForm.addEventListener('submit', async (event) => {
@@ -550,6 +563,7 @@ scoreEditForm.addEventListener('submit', async (event) => {
     const items = Array.from(scoreEditForm.querySelectorAll('[data-score-item-id]')).map(input => ({
       id: input.dataset.scoreItemId,
       label: input.dataset.scoreItemLabel,
+      max_score: normalizeMaxScore(input.dataset.scoreItemMax || input.max),
       score: Number(input.value || 0)
     }));
     const payload = {

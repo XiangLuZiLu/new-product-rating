@@ -5,7 +5,7 @@ ALTER TABLE review_scores ADD COLUMN score_items_json TEXT;
 INSERT INTO app_settings (key, value, updated_at)
 VALUES (
   'score_fields',
-  '[{"id":"appearance","label":"外观设计"},{"id":"material","label":"材质触感"},{"id":"craftsmanship","label":"工艺细节"},{"id":"capacity","label":"容量收纳"},{"id":"comfort","label":"背负舒适度"}]',
+  '[{"id":"appearance","label":"外观设计","max_score":10},{"id":"material","label":"材质触感","max_score":10},{"id":"craftsmanship","label":"工艺细节","max_score":10},{"id":"capacity","label":"容量收纳","max_score":10},{"id":"comfort","label":"背负舒适度","max_score":10}]',
   datetime('now')
 )
 ON CONFLICT(key) DO NOTHING;
