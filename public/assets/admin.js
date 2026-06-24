@@ -1,4 +1,4 @@
-console.info("product-review admin version: 20260624-oss-page-settings-v1");
+console.info("product-review admin version: 20260624-settings-tab-v1");
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
@@ -200,6 +200,8 @@ function setActiveTab(targetId) {
   $$('.tab').forEach(tab => tab.classList.toggle('active', tab.dataset.target === targetId));
   $('#styleSection').classList.toggle('hidden', targetId !== 'styleSection');
   $('#scoreSection').classList.toggle('hidden', targetId !== 'scoreSection');
+  const settingsSection = $('#settingsSection');
+  if (settingsSection) settingsSection.classList.toggle('hidden', targetId !== 'settingsSection');
 }
 function renderStats() {
   const activeStyles = styles.filter(s => Number(s.active ?? 1) === 1).length;

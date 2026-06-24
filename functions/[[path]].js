@@ -16,7 +16,7 @@ function adminHtml(adminPath, sessionIdleMinutes) {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>新品评审后台</title>
-  <link rel="stylesheet" href="/assets/style.css?v=20260624-oss-page-settings-v1" />
+  <link rel="stylesheet" href="/assets/style.css?v=20260624-settings-tab-v1" />
 </head>
 <body>
   <div class="page-bg"></div>
@@ -56,10 +56,18 @@ function adminHtml(adminPath, sessionIdleMinutes) {
       <nav class="view-tabs no-print" aria-label="功能切换">
         <button class="tab active" type="button" data-target="styleSection">款式配置</button>
         <button class="tab" type="button" data-target="scoreSection">评分结果</button>
+        <button class="tab" type="button" data-target="settingsSection">设置</button>
       </nav>
 
-      <section id="styleSection" class="card list-card">
-      <section class="card nested-card no-print">
+      <section id="settingsSection" class="card list-card hidden">
+        <div class="section-title search-title">
+          <div>
+            <h2>系统设置</h2>
+            <p class="tip">图片存储、评分项等通用配置集中放在这里，避免和款式新增编辑混在一起。</p>
+          </div>
+        </div>
+
+        <section class="card nested-card no-print">
           <div class="section-title">
             <div>
               <h2>图片存储配置</h2>
@@ -104,6 +112,10 @@ function adminHtml(adminPath, sessionIdleMinutes) {
           </div>
           <div id="scoreFieldList" class="score-field-list"></div>
         </section>
+      </section>
+
+      <section id="styleSection" class="card list-card">
+
 
         <div class="section-title search-title">
           <div>
@@ -197,7 +209,7 @@ function adminHtml(adminPath, sessionIdleMinutes) {
     </section>
   </main>
   <script>window.__ADMIN_PATH__ = ${JSON.stringify(adminPath)}; window.__SESSION_IDLE_MINUTES__ = ${JSON.stringify(sessionIdleMinutes)};</script>
-  <script src="/assets/admin.js?v=20260624-oss-page-settings-v1" defer></script>
+  <script src="/assets/admin.js?v=20260624-settings-tab-v1" defer></script>
 </body>
 </html>`;
 }
