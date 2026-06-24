@@ -96,10 +96,9 @@ function adminHtml(adminPath, sessionIdleMinutes) {
               <input name="product_image_url" placeholder="https://..." />
             </details>
           </label>
-          <label>款式编码 <span class="required">*</span><input name="style_code" placeholder="例如 XA2408A" required /></label>
-          <label>季节<input name="season" placeholder="例如 秋冬 / 春夏" /></label>
-          <label>基本售价<input name="base_price" type="number" min="0" step="0.01" placeholder="例如 138" /></label>
-          <label>排序<input name="sort_order" type="number" step="1" value="0" /></label>
+          <label class="style-code-field">款式编码 <span class="required">*</span><input name="style_code" placeholder="例如 XA2408A" required /></label>
+          <label class="season-field">季节<input name="season" placeholder="例如 秋冬 / 春夏" /></label>
+          <label class="price-field">基本售价<input name="base_price" type="number" min="0" step="0.01" placeholder="例如 138" /></label>
           <label class="switch-label"><span>启用评分</span><input name="active" type="checkbox" checked /></label>
           <label class="wide">款式备注<textarea name="style_remark" rows="3" placeholder="可填写材质、颜色、版型等说明，评分人员会看到"></textarea></label>
           <div class="form-actions wide">
@@ -119,7 +118,7 @@ function adminHtml(adminPath, sessionIdleMinutes) {
         <div class="mobile-help no-print">手机端列表可左右滑动查看完整字段。</div>
         <div class="table-wrap">
           <table class="review-table style-table">
-            <thead><tr><th>产品图</th><th>款式编码</th><th>季节</th><th>基本售价</th><th>排序</th><th>状态</th><th>备注</th><th>创建时间</th><th class="no-print">操作</th></tr></thead>
+            <thead><tr><th>产品图</th><th>款式编码</th><th>季节</th><th>基本售价</th><th>状态</th><th>备注</th><th>创建时间</th><th class="no-print">操作</th></tr></thead>
             <tbody id="stylesBody"></tbody>
           </table>
         </div>

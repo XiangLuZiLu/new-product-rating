@@ -40,6 +40,32 @@ const sessionIdleMinutes = Number(window.__SESSION_IDLE_MINUTES__ || 120);
 const sessionIdleMs = Math.max(1, sessionIdleMinutes) * 60 * 1000;
 const sessionRefreshIntervalMs = Math.min(5 * 60 * 1000, Math.max(30 * 1000, sessionIdleMs / 3));
 
+function instantButtonFeedback(button) {
+  if (!button || button.disabled) return;
+  button.classList.add('instant-tap');
+  window.setTimeout(() => button.classList.remove('instant-tap'), 120);
+}
+function setButtonBusy(button, busy, text = '处理中...') {
+  if (!button) return;
+  if (busy) {
+    if (!button.dataset.originalText) button.dataset.originalText = button.textContent;
+    button.textContent = text;
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    button.classList.add('is-busy');
+  } else {
+    if (button.dataset.originalText) button.textContent = button.dataset.originalText;
+    button.disabled = false;
+    button.removeAttribute('aria-busy');
+    button.classList.remove('is-busy');
+    delete button.dataset.originalText;
+  }
+}
+document.addEventListener('click', (event) => {
+  const control = event.target.closest('button, a.ghost');
+  instantButtonFeedback(control);
+}, { passive: true });
+
 const defaultScoreFields = [
   { id: 'appearance', label: '外观设计' },
   { id: 'material', label: '材质触感' },
@@ -200,7 +226,7 @@ function getScoreItems(score) {
 function renderStyles() {
   renderStats();
   if (!styles.length) {
-    stylesBody.innerHTML = '<tr><td class="empty" colspan="9">暂无款式，请先在后台新增需要评分的款式。</td></tr>';
+    stylesBody.innerHTML = '<tr><td class="empty" colspan="8">暂无款式，请先在后台新增需要评分的款式。</td></tr>';
     return;
   }
   stylesBody.innerHTML = styles.map(style => {
@@ -213,7 +239,6 @@ function renderStyles() {
         <td><strong>${escapeHtml(style.style_code)}</strong></td>
         <td>${escapeHtml(style.season || '')}</td>
         <td>${formatMoney(style.base_price)}</td>
-        <td>${Number(style.sort_order || 0)}</td>
         <td>${Number(style.active ?? 1) === 1 ? '<strong class="status-on">启用</strong>' : '<span class="status-off">停用</span>'}</td>
         <td class="remark-cell" title="${escapeHtml(style.style_remark || '')}">${escapeHtml(style.style_remark || '')}</td>
         <td>${escapeHtml(style.created_at || '')}</td>
@@ -298,7 +323,6 @@ function resetStyleForm() {
   editingStyleId = null;
   styleForm.reset();
   styleForm.elements.active.checked = true;
-  styleForm.elements.sort_order.value = '0';
   styleFormTitle.textContent = '新增评分款式';
   cancelStyleEditBtn.classList.add('hidden');
   setImagePreview('');
@@ -310,7 +334,6 @@ function fillStyleForm(style) {
   styleForm.elements.style_code.value = style.style_code || '';
   styleForm.elements.season.value = style.season || '';
   styleForm.elements.base_price.value = style.base_price ?? '';
-  styleForm.elements.sort_order.value = style.sort_order ?? 0;
   styleForm.elements.active.checked = Number(style.active ?? 1) === 1;
   styleForm.elements.style_remark.value = style.style_remark || '';
   cancelStyleEditBtn.classList.remove('hidden');
@@ -346,6 +369,8 @@ function updateScoreEditTotal() {
 
 loginForm.addEventListener('submit', async (event) => {
   event.preventDefault();
+  const submitBtn = loginForm.querySelector('button[type="submit"]');
+  setButtonBusy(submitBtn, true, '登录中...');
   try {
     await requestJson('/api/login', {
       method: 'POST',
@@ -357,8 +382,14 @@ loginForm.addEventListener('submit', async (event) => {
     await loadSettings();
     await Promise.all([loadStyles(), loadScores()]);
   } catch (e) { showMessage(e.message, 'error'); }
+  finally { setButtonBusy(submitBtn, false); }
 });
-logoutBtn.addEventListener('click', async () => { await fetch('/api/logout', { method: 'POST', credentials: 'include' }); showLogin(); });
+logoutBtn.addEventListener('click', async () => {
+  setButtonBusy(logoutBtn, true, '退出中...');
+  await fetch('/api/logout', { method: 'POST', credentials: 'include' }).catch(() => null);
+  setButtonBusy(logoutBtn, false);
+  showLogin();
+});
 $$('.tab').forEach(tab => tab.addEventListener('click', () => setActiveTab(tab.dataset.target)));
 
 addScoreFieldBtn.addEventListener('click', () => {
@@ -374,6 +405,7 @@ scoreFieldList.addEventListener('click', (event) => {
   row.remove();
 });
 saveScoreFieldsBtn.addEventListener('click', async () => {
+  setButtonBusy(saveScoreFieldsBtn, true, '保存中...');
   try {
     const fields = readScoreFieldsFromEditor();
     const data = await requestJson('/api/settings', {
@@ -386,6 +418,7 @@ saveScoreFieldsBtn.addEventListener('click', async () => {
     showMessage('评分项已保存，前端评分页会按新配置显示');
     await loadScores();
   } catch (e) { showMessage(e.message, 'error'); }
+  finally { setButtonBusy(saveScoreFieldsBtn, false); }
 });
 
 async function uploadAndSetPreview(file) {
@@ -420,6 +453,8 @@ styleForm.elements.product_image_url.addEventListener('input', () => setImagePre
 
 styleForm.addEventListener('submit', async (event) => {
   event.preventDefault();
+  const submitBtn = styleForm.querySelector('button[type="submit"]');
+  setButtonBusy(submitBtn, true, editingStyleId ? '更新中...' : '保存中...');
   try {
     const file = styleImageFile.files?.[0];
     if (file) await uploadAndSetPreview(file);
@@ -428,7 +463,6 @@ styleForm.addEventListener('submit', async (event) => {
       style_code: styleForm.elements.style_code.value.trim(),
       season: styleForm.elements.season.value.trim(),
       base_price: styleForm.elements.base_price.value,
-      sort_order: styleForm.elements.sort_order.value,
       active: styleForm.elements.active.checked ? 1 : 0,
       style_remark: styleForm.elements.style_remark.value.trim()
     };
@@ -441,10 +475,21 @@ styleForm.addEventListener('submit', async (event) => {
     resetStyleForm();
     await loadStyles();
   } catch (e) { showMessage(e.message, 'error'); }
+  finally { setButtonBusy(submitBtn, false); }
 });
 cancelStyleEditBtn.addEventListener('click', resetStyleForm);
-styleSearchForm.addEventListener('submit', async (event) => { event.preventDefault(); try { await loadStyles(); } catch(e) { showMessage(e.message, 'error'); } });
-$('#clearStyleSearchBtn').addEventListener('click', async () => { styleSearchForm.reset(); await loadStyles(); });
+styleSearchForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const submitBtn = event.submitter || styleSearchForm.querySelector('button[type="submit"]');
+  setButtonBusy(submitBtn, true, '查询中...');
+  try { await loadStyles(); } catch(e) { showMessage(e.message, 'error'); }
+  finally { setButtonBusy(submitBtn, false); }
+});
+$('#clearStyleSearchBtn').addEventListener('click', async (event) => {
+  setButtonBusy(event.currentTarget, true, '重置中...');
+  styleSearchForm.reset();
+  try { await loadStyles(); } finally { setButtonBusy(event.currentTarget, false); }
+});
 stylesBody.addEventListener('click', async (event) => {
   const btn = event.target.closest('button[data-style-action]');
   if (!btn) return;
@@ -457,8 +502,18 @@ stylesBody.addEventListener('click', async (event) => {
   }
 });
 
-scoreSearchForm.addEventListener('submit', async (event) => { event.preventDefault(); try { await loadScores(); } catch(e) { showMessage(e.message, 'error'); } });
-$('#clearScoreSearchBtn').addEventListener('click', async () => { scoreSearchForm.reset(); await loadScores(); });
+scoreSearchForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const submitBtn = event.submitter || scoreSearchForm.querySelector('button[type="submit"]');
+  setButtonBusy(submitBtn, true, '查询中...');
+  try { await loadScores(); } catch(e) { showMessage(e.message, 'error'); }
+  finally { setButtonBusy(submitBtn, false); }
+});
+$('#clearScoreSearchBtn').addEventListener('click', async (event) => {
+  setButtonBusy(event.currentTarget, true, '重置中...');
+  scoreSearchForm.reset();
+  try { await loadScores(); } finally { setButtonBusy(event.currentTarget, false); }
+});
 scoresBody.addEventListener('click', async (event) => {
   const btn = event.target.closest('button[data-score-action]');
   if (!btn) return;
@@ -489,6 +544,8 @@ scoreEditForm.addEventListener('input', (event) => {
 scoreEditForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   if (!editingScoreId || !editingScoreMeta) return;
+  const submitBtn = scoreEditForm.querySelector('button[type="submit"]');
+  setButtonBusy(submitBtn, true, '保存中...');
   try {
     const items = Array.from(scoreEditForm.querySelectorAll('[data-score-item-id]')).map(input => ({
       id: input.dataset.scoreItemId,
@@ -512,6 +569,7 @@ scoreEditForm.addEventListener('submit', async (event) => {
     scoreEditForm.reset();
     await loadScores();
   } catch(e) { showMessage(e.message, 'error'); }
+  finally { setButtonBusy(submitBtn, false); }
 });
 cancelScoreEditBtn.addEventListener('click', () => { editingScoreId = null; editingScoreMeta = null; scoreEditPanel.classList.add('hidden'); scoreEditForm.reset(); });
 $('#closeHistoryBtn').addEventListener('click', () => historyPanel.classList.add('hidden'));

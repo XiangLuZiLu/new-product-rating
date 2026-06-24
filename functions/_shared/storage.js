@@ -327,7 +327,7 @@ function createD1Storage(env) {
         const like = `%${keyword}%`;
         binds.push(like, like, like);
       }
-      const sql = `SELECT * FROM review_styles WHERE ${where.join(' AND ')} ORDER BY active DESC, sort_order ASC, id ASC`;
+      const sql = `SELECT * FROM review_styles WHERE ${where.join(' AND ')} ORDER BY id ASC`;
       const { results } = await DB().prepare(sql).bind(...binds).all();
       return results || [];
     },
@@ -508,14 +508,14 @@ function createKVStorage(env) {
       return rows
         .filter(row => !filters.activeOnly || Number(row.active ?? 1) === 1)
         .filter(row => !keyword || [row.style_code, row.season, row.style_remark].some(v => String(v || '').toLowerCase().includes(keyword)))
-        .sort((a, b) => Number(b.active ?? 1) - Number(a.active ?? 1) || Number(a.sort_order || 0) - Number(b.sort_order || 0) || String(a.id).localeCompare(String(b.id)));
+        .sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')) || String(a.id).localeCompare(String(b.id)));
     },
     async createStyle(data) {
       const id = crypto.randomUUID();
       const row = { id, ...data, created_at: now(), updated_at: now(), deleted_at: null };
       await putJson(keyStyle(id), row);
       const ids = await getIndex('styles');
-      await setIndex('styles', [id, ...ids]);
+      await setIndex('styles', [...ids, id]);
       return row;
     },
     async updateStyle(id, data) {

@@ -122,6 +122,21 @@ button, a.ghost {
   padding: 10px 15px;
   font-weight: 700;
   white-space: nowrap;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .1s ease, transform .06s ease, box-shadow .1s ease, opacity .1s ease;
+}
+button:not(:disabled):active,
+a.ghost:active,
+button.instant-tap,
+a.ghost.instant-tap {
+  transform: translateY(1px) scale(.99);
+}
+button:disabled,
+button.is-busy {
+  cursor: not-allowed;
+  opacity: .58;
 }
 
 .primary {
@@ -733,7 +748,7 @@ button.disabled {
 .admin-style-form,
 .score-edit-form {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(12, minmax(0, 1fr));
   gap: 14px;
   padding: 16px;
   margin-bottom: 22px;
@@ -741,15 +756,15 @@ button.disabled {
   border-radius: 16px;
   background: #f8fafc;
 }
-.admin-style-form label:nth-child(1) { grid-column: span 2; }
-.admin-style-form label:nth-child(2) { grid-column: span 2; }
-.admin-style-form label:nth-child(3),
-.admin-style-form label:nth-child(4),
-.admin-style-form label:nth-child(5),
-.admin-style-form label:nth-child(6) { grid-column: span 1; }
+.admin-style-form .image-field { grid-column: 1 / -1; }
+.admin-style-form .style-code-field { grid-column: span 6; }
+.admin-style-form .season-field,
+.admin-style-form .price-field { grid-column: span 3; }
+.admin-style-form .switch-label { grid-column: span 2; }
+.admin-style-form .wide { grid-column: 1 / -1; }
 .score-edit-form label:nth-child(2),
 .score-edit-form label:nth-child(3),
-.score-edit-form label:nth-child(4) { grid-column: span 2; }
+.score-edit-form label:nth-child(4) { grid-column: span 4; }
 .form-actions {
   display: flex;
   gap: 10px;
@@ -766,7 +781,7 @@ button.disabled {
 }
 .switch-label input { width: 24px; height: 24px; accent-color: var(--primary); }
 .table-section-title { margin-top: 8px; }
-.style-table { min-width: 980px; }
+.style-table { min-width: 900px; }
 .status-on { color: var(--success); }
 .status-off { color: var(--muted); }
 .nested-card {
@@ -782,6 +797,8 @@ button.disabled {
   .score-edit-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .admin-style-form label:nth-child(n),
   .score-edit-form label:nth-child(n) { grid-column: span 1; }
+  .admin-style-form .image-field,
+  .admin-style-form .style-code-field,
   .admin-style-form .wide,
   .score-edit-form .wide { grid-column: 1 / -1 !important; }
 }
@@ -794,7 +811,7 @@ button.disabled {
   .admin-style-form,
   .score-edit-form { grid-template-columns: 1fr; padding: 12px; }
   .admin-style-form label:nth-child(n),
-  .score-edit-form label:nth-child(n) { grid-column: 1 / -1; }
+  .score-edit-form label:nth-child(n) { grid-column: 1 / -1 !important; }
   .form-actions { flex-direction: column; align-items: stretch; }
 }
 
