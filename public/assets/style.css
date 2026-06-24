@@ -1054,3 +1054,42 @@ button.disabled {
   .inline-style-input { min-width: 140px; }
   .inline-image-editor { min-width: 160px; }
 }
+
+/* 评分结果按一次提交聚合展示 */
+.link-button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  color: #1d4ed8;
+  font-weight: 800;
+  cursor: pointer;
+}
+.link-button:hover { text-decoration: underline; }
+.group-count {
+  display: inline-flex;
+  margin-left: 8px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #eef5ff;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 700;
+}
+.score-group-row.opened td { background: #f8fbff; }
+.score-group-detail-row > td { padding: 0 !important; background: #f8fbff; }
+.score-group-detail {
+  margin: 10px;
+  padding: 14px;
+  border: 1px solid #dbe7ff;
+  border-radius: 16px;
+  background: #fff;
+}
+.compact-title { margin-bottom: 10px; }
+.nested-table-wrap { border-radius: 14px; }
+.detail-score-table th,
+.detail-score-table td { white-space: nowrap; }
+@media print {
+  .score-group-detail-row { display: table-row; }
+}

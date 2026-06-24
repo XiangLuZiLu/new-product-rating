@@ -58,6 +58,16 @@ function today() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function nowDateTime() {
+  return new Date().toISOString().replace('T', ' ').slice(0, 19);
+}
+
+function newSubmissionId() {
+  return (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function')
+    ? globalThis.crypto.randomUUID()
+    : `submission_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+}
+
 function normalizeDriver(env) {
   return String(env.STORAGE_DRIVER || env.DATA_DRIVER || 'd1').trim().toLowerCase();
 }
@@ -136,7 +146,9 @@ export function normalizeScorePayload(payload = {}, scoreFields = DEFAULT_SCORE_
     style_id: toIntId(payload.style_id, '款式ID'),
     reviewer: String(payload.reviewer || '').trim(),
     review_date: String(payload.review_date || today()).trim(),
-    remark: String(payload.remark || '').trim()
+    remark: String(payload.remark || '').trim(),
+    submission_id: String(payload.submission_id || '').trim(),
+    submitted_at: String(payload.submitted_at || '').trim()
   };
   if (!data.reviewer) throw new Error('评分人姓名不能为空');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(data.review_date)) throw new Error('评审日期格式应为 YYYY-MM-DD');
@@ -273,6 +285,8 @@ function createD1Storage(env) {
       )
     `).run();
     await ensureD1Column(DB(), 'review_scores', 'score_items_json', 'TEXT');
+    await ensureD1Column(DB(), 'review_scores', 'submission_id', 'TEXT');
+    await ensureD1Column(DB(), 'review_scores', 'submitted_at', 'TEXT');
     await DB().prepare(`
       CREATE TABLE IF NOT EXISTS review_score_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -383,12 +397,13 @@ function createD1Storage(env) {
         INSERT INTO review_scores (
           style_id, product_image, style_code, season, base_price,
           appearance_score, material_score, craftsmanship_score, capacity_score, comfort_score, score_items_json,
-          total_score, grade, remark, reviewer, review_date
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          total_score, grade, remark, reviewer, review_date, submission_id, submitted_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).bind(
         style.id, style.product_image || '', style.style_code, style.season || '', style.base_price,
         data.appearance_score, data.material_score, data.craftsmanship_score, data.capacity_score, data.comfort_score, data.score_items_json,
-        data.total_score, data.grade, data.remark, data.reviewer, data.review_date
+        data.total_score, data.grade, data.remark, data.reviewer, data.review_date,
+        data.submission_id || newSubmissionId(), data.submitted_at || nowDateTime()
       ).run();
       const score = await getScoreById(result.meta.last_row_id);
       await addScoreHistory(score.id, 'create', score);
@@ -551,12 +566,14 @@ function createKVStorage(env) {
       const id = crypto.randomUUID();
       const row = {
         id,
+        ...data,
+        submission_id: data.submission_id || newSubmissionId(),
+        submitted_at: data.submitted_at || now(),
         style_id: style.id,
         product_image: style.product_image || '',
         style_code: style.style_code,
         season: style.season || '',
         base_price: style.base_price,
-        ...data,
         created_at: now(), updated_at: now(), deleted_at: null
       };
       await putJson(keyScore(id), row);

@@ -33,6 +33,7 @@ let drafts = [];
 let currentIndex = 0;
 let isRendering = false;
 let scrollTimer = null;
+let submittingAll = false;
 
 function today() {
   return new Date().toISOString().slice(0, 10);
@@ -174,7 +175,7 @@ function renderSlides() {
               <h3>${escapeHtml(style.style_code)}</h3>
               <p>第 ${index + 1} 款 / 共 ${styles.length} 款</p>
             </div>
-            ${draft.submitted ? '<span class="edit-badge saved-badge">已提交</span>' : ''}
+            ${draft.submitted ? '<span class="edit-badge saved-badge">已提交</span>' : (isComplete(draft) ? '<span class="edit-badge saved-badge">已填写</span>' : '')}
           </header>
 
           <div class="public-style-card">
@@ -241,9 +242,9 @@ function updateStatus() {
   if (!styles.length) {
     slideHint.textContent = '暂无可评分款式';
   } else if (draft?.submitted) {
-    slideHint.textContent = isLast ? '当前款已提交，可以完成' : '当前款已提交，可以进入下一页';
+    slideHint.textContent = isLast ? '评分已提交' : '当前款已提交，可以进入下一页';
   } else {
-    slideHint.textContent = complete ? '当前款已填写完整，可以进入下一页' : `填写完整后才能进入下一页，还缺：${missing.join('、')}`;
+    slideHint.textContent = complete ? (isLast ? '当前款已填写完整，可以提交全部评分' : '当前款已填写完整，可以进入下一页') : `填写完整后才能进入下一页，还缺：${missing.join('、')}`;
   }
 
   [prevSlideBtn, bottomPrevBtn].forEach(btn => {
@@ -257,7 +258,7 @@ function updateStatus() {
     if (!btn) return;
     btn.disabled = nextDisabled;
     btn.classList.toggle('disabled', nextDisabled);
-    btn.textContent = isLast ? '完成' : '下一页';
+    btn.textContent = isLast ? '提交' : '下一页';
     btn.title = nextDisabled ? `请先填写完整：${missing.join('、')}` : '';
   });
 
@@ -287,46 +288,65 @@ function goToSlide(index, smooth = true, force = false) {
 
 async function submitCurrentAndNext() {
   const draft = drafts[currentIndex];
-  if (!draft) return;
-  if (!draft.submitted && !isComplete(draft)) {
+  if (!draft || submittingAll) return;
+  if (!isComplete(draft)) {
     showMessage(`请先完成当前款评分：${missingFields(draft).join('、')}`, 'error');
     updateStatus();
     return;
   }
 
-  try {
-    if (!draft.submitted) {
-      const payload = {
-        reviewer,
-        style_id: styles[currentIndex].id,
-        review_date: today(),
-        remark: draft.remark,
-        score_items: scoreFields.map(field => ({ id: field.id, label: field.label, max_score: normalizeMaxScore(field.max_score), score: Number(draft.scores[field.id] || 0) }))
-      };
-      const data = await requestJson('/api/public/scores', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json; charset=utf-8' },
-        body: JSON.stringify(payload)
-      });
-      draft.submitted = true;
-      draft.score_id = data.score?.id || null;
-    }
+  if (currentIndex < styles.length - 1) {
+    const nextIndex = currentIndex + 1;
+    goToSlide(nextIndex, true, true);
+    showMessage(`第 ${nextIndex} 款已填写，最终提交前不会写入数据库`);
+    return;
+  }
 
-    if (currentIndex < styles.length - 1) {
-      const nextIndex = currentIndex + 1;
-      renderSlides();
-      currentIndex = nextIndex - 1;
-      goToSlide(nextIndex, true, true);
-      showMessage(`第 ${nextIndex} 款已提交，已进入第 ${nextIndex + 1} 款`);
-    } else {
-      showView(doneView);
-      doneText.textContent = `${reviewer}，你已完成 ${styles.length} 个款式的评分。`;
-    }
+  const incompleteIndex = drafts.findIndex(item => !isComplete(item));
+  if (incompleteIndex !== -1) {
+    goToSlide(incompleteIndex, true, true);
+    showMessage(`请先完成第 ${incompleteIndex + 1} 款评分`, 'error');
+    return;
+  }
+
+  submittingAll = true;
+  [nextSlideBtn, bottomNextBtn].forEach(btn => { if (btn) { btn.disabled = true; btn.textContent = '提交中...'; } });
+  try {
+    const payload = {
+      reviewer,
+      review_date: today(),
+      scores: drafts.map((item, index) => ({
+        reviewer,
+        style_id: styles[index].id,
+        review_date: today(),
+        remark: item.remark,
+        score_items: scoreFields.map(field => ({
+          id: field.id,
+          label: field.label,
+          max_score: normalizeMaxScore(field.max_score),
+          score: Number(item.scores[field.id] || 0)
+        }))
+      }))
+    };
+    const data = await requestJson('/api/public/submit', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+      body: JSON.stringify(payload)
+    });
+    (data.scores || []).forEach((score, index) => {
+      if (drafts[index]) {
+        drafts[index].submitted = true;
+        drafts[index].score_id = score?.id || null;
+      }
+    });
+    showView(doneView);
+    doneText.textContent = `${reviewer}，你已提交 ${data.scores?.length || styles.length} 个款式的评分。`;
   } catch (e) {
     showMessage(e.message, 'error');
+    submittingAll = false;
+    updateStatus();
   }
 }
-
 reviewerForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   reviewer = reviewerForm.elements.reviewer.value.trim();
@@ -411,6 +431,7 @@ restartBtn.addEventListener('click', () => {
   styles = [];
   drafts = [];
   currentIndex = 0;
+  submittingAll = false;
   reviewerForm.reset();
   showView(nameView);
 });

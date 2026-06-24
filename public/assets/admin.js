@@ -1,4 +1,4 @@
-console.info("product-review admin version: 20260624-inline-edit-cache-bust-v2");
+console.info("product-review admin version: 20260624-submit-group-v1");
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
@@ -30,6 +30,8 @@ const stylePreview = $('#stylePreview');
 
 let styles = [];
 let scores = [];
+let scoreGroups = [];
+let selectedScoreGroupKey = null;
 let scoreFields = [];
 let editingStyleId = null;
 let inlineEditingStyleId = null;
@@ -234,6 +236,91 @@ function getScoreItems(score) {
   if (Array.isArray(score?.score_items) && score.score_items.length) return score.score_items;
   return scoreFields.map(field => ({ id: field.id, label: field.label, max_score: normalizeMaxScore(field.max_score), score: Number(score?.[field.id] || 0) }));
 }
+function getScoreSubmitTime(score) {
+  return String(score?.submitted_at || score?.created_at || score?.review_date || '').trim();
+}
+function getScoreGroupKey(score) {
+  const submissionId = String(score?.submission_id || '').trim();
+  if (submissionId) return `submission:${submissionId}`;
+  return `legacy:${score?.id || ''}`;
+}
+function buildScoreGroups(rows) {
+  const groups = new Map();
+  for (const score of rows || []) {
+    const key = getScoreGroupKey(score);
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        reviewer: String(score.reviewer || '').trim() || '未命名',
+        submitted_at: getScoreSubmitTime(score),
+        scores: []
+      });
+    }
+    const group = groups.get(key);
+    group.scores.push(score);
+    if (getScoreSubmitTime(score) > group.submitted_at) group.submitted_at = getScoreSubmitTime(score);
+  }
+  return Array.from(groups.values())
+    .map(group => ({ ...group, scores: group.scores.sort((a, b) => Number(a.style_id || 0) - Number(b.style_id || 0) || String(a.style_code || '').localeCompare(String(b.style_code || ''))) }))
+    .sort((a, b) => String(b.submitted_at || '').localeCompare(String(a.submitted_at || '')));
+}
+function renderScoreGroupDetail(group) {
+  const labels = [];
+  for (const score of group.scores) {
+    for (const item of getScoreItems(score)) {
+      if (!labels.includes(item.label)) labels.push(item.label);
+    }
+  }
+  if (!labels.length) labels.push(...scoreFields.map(item => item.label));
+  return `
+    <tr class="score-group-detail-row">
+      <td colspan="3">
+        <div class="score-group-detail">
+          <div class="section-title compact-title">
+            <div>
+              <h3>${escapeHtml(group.reviewer)} 的本次提交明细</h3>
+              <p class="tip">提交时间：${escapeHtml(group.submitted_at || '-')}，共 ${group.scores.length} 款。</p>
+            </div>
+          </div>
+          <div class="table-wrap nested-table-wrap">
+            <table class="review-table detail-score-table">
+              <thead><tr>
+                <th>产品图</th><th>款式编码</th><th>季节</th><th>基本售价</th>
+                ${labels.map(label => `<th>${escapeHtml(label)}</th>`).join('')}
+                <th>总分</th><th>等级</th><th>备注</th><th class="no-print">操作</th>
+              </tr></thead>
+              <tbody>
+                ${group.scores.map(score => {
+                  const image = score.product_image
+                    ? `<img class="photo" src="${escapeHtml(score.product_image)}" alt="产品图" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'photo-placeholder',textContent:'无图'}))">`
+                    : '<span class="photo-placeholder">无图</span>';
+                  const values = Object.fromEntries(getScoreItems(score).map(item => [item.label, `${item.score} / ${normalizeMaxScore(item.max_score)}`]));
+                  return `
+                    <tr>
+                      <td>${image}</td>
+                      <td><strong>${escapeHtml(score.style_code)}</strong></td>
+                      <td>${escapeHtml(score.season || '')}</td>
+                      <td>${formatMoney(score.base_price)}</td>
+                      ${labels.map(label => `<td class="score-cell">${escapeHtml(values[label] ?? '')}</td>`).join('')}
+                      <td class="total-cell">${escapeHtml(score.total_score)}</td>
+                      <td><strong>${escapeHtml(score.grade)}</strong></td>
+                      <td class="remark-cell" title="${escapeHtml(score.remark || '')}">${escapeHtml(score.remark || '')}</td>
+                      <td class="no-print"><div class="actions">
+                        <button class="ghost" data-score-action="edit" data-id="${escapeHtml(score.id)}">编辑</button>
+                        <button class="ghost" data-score-action="history" data-id="${escapeHtml(score.id)}">历史</button>
+                        <button class="danger-light" data-score-action="delete" data-id="${escapeHtml(score.id)}">删除</button>
+                      </div></td>
+                    </tr>
+                  `;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </td>
+    </tr>
+  `;
+}
 function renderStylePhoto(url, className = 'photo') {
   const safe = String(url || '').trim();
   return safe
@@ -313,47 +400,34 @@ function renderStyles() {
 }
 function renderScores() {
   renderStats();
-  const dynamicLabels = [];
-  for (const score of scores) {
-    for (const item of getScoreItems(score)) {
-      if (!dynamicLabels.includes(item.label)) dynamicLabels.push(item.label);
-    }
-  }
-  if (!dynamicLabels.length) dynamicLabels.push(...scoreFields.map(item => item.label));
+  scoreGroups = buildScoreGroups(scores);
+  if (selectedScoreGroupKey && !scoreGroups.some(group => group.key === selectedScoreGroupKey)) selectedScoreGroupKey = null;
+
   scoresHead.innerHTML = `
     <tr>
-      <th>产品图</th><th>款式编码</th><th>季节</th><th>基本售价</th>
-      ${dynamicLabels.map(label => `<th>${escapeHtml(label)}</th>`).join('')}
-      <th>总分</th><th>等级</th><th>评分人</th><th>日期</th><th>备注</th><th>提交时间</th><th class="no-print">操作</th>
+      <th>评分人</th>
+      <th>提交时间</th>
+      <th class="no-print">操作</th>
     </tr>`;
-  if (!scores.length) {
-    scoresBody.innerHTML = `<tr><td class="empty" colspan="${dynamicLabels.length + 11}">暂无评分记录。</td></tr>`;
+  if (!scoreGroups.length) {
+    scoresBody.innerHTML = '<tr><td class="empty" colspan="3">暂无评分记录。</td></tr>';
     return;
   }
-  scoresBody.innerHTML = scores.map(score => {
-    const image = score.product_image
-      ? `<img class="photo" src="${escapeHtml(score.product_image)}" alt="产品图" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'photo-placeholder',textContent:'无图'}))">`
-      : '<span class="photo-placeholder">无图</span>';
-    const values = Object.fromEntries(getScoreItems(score).map(item => [item.label, item.score]));
+  scoresBody.innerHTML = scoreGroups.map((group, index) => {
+    const opened = selectedScoreGroupKey === group.key;
     return `
-      <tr>
-        <td>${image}</td>
-        <td><strong>${escapeHtml(score.style_code)}</strong></td>
-        <td>${escapeHtml(score.season || '')}</td>
-        <td>${formatMoney(score.base_price)}</td>
-        ${dynamicLabels.map(label => `<td class="score-cell">${values[label] ?? ''}</td>`).join('')}
-        <td class="total-cell">${score.total_score}</td>
-        <td><strong>${escapeHtml(score.grade)}</strong></td>
-        <td>${escapeHtml(score.reviewer)}</td>
-        <td>${escapeHtml(score.review_date)}</td>
-        <td class="remark-cell" title="${escapeHtml(score.remark || '')}">${escapeHtml(score.remark || '')}</td>
-        <td>${escapeHtml(score.created_at || '')}</td>
+      <tr class="score-group-row ${opened ? 'opened' : ''}">
+        <td>
+          <button class="link-button reviewer-link" type="button" data-score-group-action="toggle" data-group-index="${index}">${escapeHtml(group.reviewer)}</button>
+          <span class="group-count">${group.scores.length} 款</span>
+        </td>
+        <td>${escapeHtml(group.submitted_at || '-')}</td>
         <td class="no-print"><div class="actions">
-          <button class="ghost" data-score-action="edit" data-id="${escapeHtml(score.id)}">编辑</button>
-          <button class="ghost" data-score-action="history" data-id="${escapeHtml(score.id)}">历史</button>
-          <button class="danger-light" data-score-action="delete" data-id="${escapeHtml(score.id)}">删除</button>
+          <button class="ghost" type="button" data-score-group-action="toggle" data-group-index="${index}">${opened ? '收起' : '查看'}</button>
+          <button class="danger-light" type="button" data-score-group-action="delete" data-group-index="${index}">删除</button>
         </div></td>
       </tr>
+      ${opened ? renderScoreGroupDetail(group) : ''}
     `;
   }).join('');
 }
@@ -629,6 +703,32 @@ $('#clearScoreSearchBtn').addEventListener('click', async (event) => {
   try { await loadScores(); } finally { setButtonBusy(event.currentTarget, false); }
 });
 scoresBody.addEventListener('click', async (event) => {
+  const groupBtn = event.target.closest('button[data-score-group-action]');
+  if (groupBtn) {
+    const group = scoreGroups[Number(groupBtn.dataset.groupIndex)];
+    if (!group) return;
+    const action = groupBtn.dataset.scoreGroupAction;
+    if (action === 'toggle') {
+      selectedScoreGroupKey = selectedScoreGroupKey === group.key ? null : group.key;
+      renderScores();
+      return;
+    }
+    if (action === 'delete') {
+      if (!confirm(`确定删除 ${group.reviewer} 在 ${group.submitted_at || '-'} 提交的 ${group.scores.length} 款评分吗？`)) return;
+      setButtonBusy(groupBtn, true, '删除中...');
+      try {
+        for (const item of group.scores) {
+          await requestJson(`/api/scores/${encodeURIComponent(item.id)}`, { method: 'DELETE' });
+        }
+        showMessage('本次提交已删除');
+        selectedScoreGroupKey = null;
+        await loadScores();
+      } catch(e) { showMessage(e.message, 'error'); }
+      finally { setButtonBusy(groupBtn, false); }
+      return;
+    }
+  }
+
   const btn = event.target.closest('button[data-score-action]');
   if (!btn) return;
   const score = scores.find(row => String(row.id) === String(btn.dataset.id));

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>新品评审评分</title>
-  <link rel="stylesheet" href="/assets/style.css?v=20260624-inline-edit-cache-bust-v2" />
+  <link rel="stylesheet" href="/assets/style.css?v=20260624-submit-group-v1" />
 </head>
 <body>
   <div class="page-bg"></div>
@@ -40,7 +40,7 @@
       <div class="section-title score-title">
         <div>
           <h2>逐款评分</h2>
-          <p class="tip">当前款评分完整后，“下一页”才会亮起；点击下一页时会自动提交当前款评分。</p>
+          <p class="tip">当前款评分完整后，“下一页”才会亮起；最后一款点击“提交”后，才会一次性写入数据库。</p>
         </div>
         <div class="reviewer-pill">评分人：<strong id="reviewerNameText"></strong></div>
       </div>
@@ -74,6 +74,6 @@
       <button id="restartBtn" type="button" class="primary full">重新评分</button>
     </section>
   </main>
-  <script src="/assets/rating.js?v=20260624-inline-edit-cache-bust-v2" defer></script>
+  <script src="/assets/rating.js?v=20260624-submit-group-v1" defer></script>
 </body>
 </html>
