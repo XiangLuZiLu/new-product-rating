@@ -539,3 +539,57 @@ button, a.ghost {
 }
 
 .public-card .tip + .tip { margin-top: 10px; }
+
+.image-field small {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.image-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.file-input {
+  max-width: 220px;
+  padding: 10px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.75);
+  color: var(--text);
+}
+
+.image-preview-wrap {
+  margin-top: 10px;
+  min-height: 82px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.55);
+  overflow: hidden;
+  color: var(--muted);
+}
+
+.image-preview {
+  width: 100%;
+  max-height: 180px;
+  object-fit: contain;
+  display: block;
+}
+
+@media (max-width: 720px) {
+  .image-input-row {
+    grid-template-columns: 1fr;
+  }
+
+  .file-input {
+    max-width: none;
+    width: 100%;
+  }
+}

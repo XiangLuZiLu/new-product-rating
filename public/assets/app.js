@@ -122,6 +122,31 @@ async function requestJson(path, options = {}) {
   return data;
 }
 
+async function uploadImageFile(file, index) {
+  if (!file) return;
+  if (!file.type.startsWith('image/')) throw new Error('请选择图片文件');
+  const form = new FormData();
+  form.append('file', file);
+  const response = await fetch('/api/upload-image', {
+    method: 'POST',
+    credentials: 'include',
+    body: form
+  });
+  const data = await response.json().catch(() => null);
+  if (!response.ok || !data || data.ok === false) {
+    throw new Error(data?.message || '图片上传失败');
+  }
+  const url = data.url || data.image?.url;
+  if (!url) throw new Error('图片上传成功，但没有返回图片地址');
+  drafts[index].product_image = url;
+  const slide = scoreCarousel.querySelector(`.score-slide[data-index="${index}"]`);
+  const urlInput = slide?.querySelector('[data-field="product_image"]');
+  if (urlInput) urlInput.value = url;
+  const preview = slide?.querySelector('[data-image-preview]');
+  if (preview) preview.innerHTML = `<img class="image-preview" src="${escapeHtml(url)}" alt="产品图预览" />`;
+  showMessage('图片已上传，并已填入产品图链接');
+}
+
 function ensureDraftCount(count) {
   const n = Math.max(1, Math.min(50, Number.parseInt(count, 10) || 1));
   pageCount = n;
@@ -184,9 +209,16 @@ function renderSlides() {
         </header>
 
         <div class="slide-form">
-          <label>
-            产品图链接
-            <input data-field="product_image" value="${escapeHtml(draft.product_image)}" placeholder="可填图片 URL，留空也可以" />
+          <label class="wide image-field">
+            产品图链接 / 上传图片
+            <div class="image-input-row">
+              <input data-field="product_image" value="${escapeHtml(draft.product_image)}" placeholder="可手动填写图片 URL，也可选择图片自动上传" />
+              <input class="file-input" data-image-file type="file" accept="image/*" />
+            </div>
+            <small>图片会上传到你配置的 R2/S3/OSS；D1/KV 只保存图片地址。</small>
+            <div class="image-preview-wrap" data-image-preview>
+              ${draft.product_image ? `<img class="image-preview" src="${escapeHtml(draft.product_image)}" alt="产品图预览" />` : '<span>暂无图片</span>'}
+            </div>
           </label>
           <label>
             款式编码 <span class="required">*</span>
@@ -463,7 +495,23 @@ scoreCarousel.addEventListener('input', (event) => {
   }
 });
 
-scoreCarousel.addEventListener('change', (event) => {
+scoreCarousel.addEventListener('change', async (event) => {
+  const imageInput = event.target.closest('[data-image-file]');
+  if (imageInput) {
+    const slide = imageInput.closest('.score-slide');
+    const index = Number(slide.dataset.index);
+    try {
+      imageInput.disabled = true;
+      await uploadImageFile(imageInput.files?.[0], index);
+      imageInput.value = '';
+    } catch (e) {
+      showMessage(e.message, 'error');
+    } finally {
+      imageInput.disabled = false;
+    }
+    return;
+  }
+
   const input = event.target.closest('[data-field]');
   if (!input) return;
   const slide = input.closest('.score-slide');

@@ -49,6 +49,7 @@ function normalizeDriver(env) {
 export function getStorage(env) {
   const driver = normalizeDriver(env);
   if (['http', 'external', 'api', 'custom'].includes(driver)) return createHttpStorage(env);
+  if (['kv', 'cloudflare-kv', 'workers-kv'].includes(driver)) return createKVStorage(env);
   return createD1Storage(env);
 }
 
@@ -200,6 +201,139 @@ function createD1Storage(env) {
         VALUES ('score_page_count', ?, datetime('now'))
         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
       `).bind(String(value)).run();
+      return value;
+    }
+  };
+}
+
+function createKVStorage(env) {
+  const kv = env.KV || env.REVIEW_KV || env.DATA_KV;
+  if (!kv || typeof kv.get !== 'function') {
+    throw new Error('当前使用 KV 存储，但未绑定 KV namespace。请配置 binding = "KV"，或把 STORAGE_DRIVER 改为 d1/http。');
+  }
+  const prefix = String(env.KV_PREFIX || 'product-review:').trim() || 'product-review:';
+  const keyIndex = `${prefix}items:index`;
+  const keySettings = `${prefix}settings`;
+
+  const keyItem = (id) => `${prefix}item:${id}`;
+  const keyHistory = (id) => `${prefix}history:${id}`;
+  const now = () => new Date().toISOString();
+
+  async function getJson(key, fallback) {
+    const value = await kv.get(key, { type: 'json' });
+    return value ?? fallback;
+  }
+
+  async function putJson(key, value) {
+    await kv.put(key, JSON.stringify(value));
+  }
+
+  async function getIndex() {
+    const index = await getJson(keyIndex, []);
+    return Array.isArray(index) ? index : [];
+  }
+
+  async function setIndex(ids) {
+    const clean = Array.from(new Set((ids || []).map(String).filter(Boolean)));
+    await putJson(keyIndex, clean);
+    return clean;
+  }
+
+  async function getById(id) {
+    if (!id) return null;
+    return getJson(keyItem(String(id)), null);
+  }
+
+  async function addHistory(itemId, action, snapshot) {
+    const id = String(itemId);
+    const history = await getJson(keyHistory(id), []);
+    const entry = {
+      id: crypto.randomUUID(),
+      item_id: id,
+      action,
+      snapshot_json: JSON.stringify(snapshot || {}),
+      changed_at: now()
+    };
+    history.unshift(entry);
+    await putJson(keyHistory(id), history.slice(0, 100));
+  }
+
+  function matchesFilters(item, filters = {}) {
+    if (!item || item.deleted_at) return false;
+    const keyword = String(filters.search || '').trim().toLowerCase();
+    const dateFrom = String(filters.date_from || '').trim();
+    const dateTo = String(filters.date_to || '').trim();
+    if (keyword) {
+      const haystack = [item.style_code, item.season, item.reviewer, item.remark].join(' ').toLowerCase();
+      if (!haystack.includes(keyword)) return false;
+    }
+    if (dateFrom && String(item.review_date || '') < dateFrom) return false;
+    if (dateTo && String(item.review_date || '') > dateTo) return false;
+    return true;
+  }
+
+  return {
+    async listItems(filters = {}) {
+      const limit = Math.max(1, Math.min(5000, Number.parseInt(filters.limit || '500', 10) || 500));
+      const ids = await getIndex();
+      const rows = (await Promise.all(ids.map(id => getById(id)))).filter(item => matchesFilters(item, filters));
+      rows.sort((a, b) => String(b.review_date || '').localeCompare(String(a.review_date || '')) || String(b.created_at || '').localeCompare(String(a.created_at || '')));
+      return rows.slice(0, limit);
+    },
+
+    async createItem(data) {
+      const id = crypto.randomUUID();
+      const item = { id, ...data, created_at: now(), updated_at: now(), deleted_at: null };
+      await putJson(keyItem(id), item);
+      const ids = await getIndex();
+      ids.unshift(id);
+      await setIndex(ids);
+      await addHistory(id, 'create', item);
+      return item;
+    },
+
+    async updateItem(id, data) {
+      const oldItem = await getById(id);
+      if (!oldItem || oldItem.deleted_at) {
+        const error = new Error('记录不存在');
+        error.status = 404;
+        throw error;
+      }
+      const item = { ...oldItem, ...data, id: oldItem.id, created_at: oldItem.created_at, updated_at: now(), deleted_at: null };
+      await putJson(keyItem(id), item);
+      await addHistory(id, 'update', { before: oldItem, after: item });
+      return item;
+    },
+
+    async deleteItem(id) {
+      const oldItem = await getById(id);
+      if (!oldItem || oldItem.deleted_at) {
+        const error = new Error('记录不存在');
+        error.status = 404;
+        throw error;
+      }
+      const item = { ...oldItem, deleted_at: now(), updated_at: now() };
+      await putJson(keyItem(id), item);
+      await addHistory(id, 'delete', oldItem);
+      return true;
+    },
+
+    async getHistory(id) {
+      const history = await getJson(keyHistory(String(id)), []);
+      return Array.isArray(history) ? history.slice(0, 100) : [];
+    },
+
+    async getScorePageCount() {
+      const settings = await getJson(keySettings, {});
+      return safeCount(settings.score_page_count || 3, 3);
+    },
+
+    async setScorePageCount(count) {
+      const value = safeCount(count, 1);
+      const settings = await getJson(keySettings, {});
+      settings.score_page_count = value;
+      settings.updated_at = now();
+      await putJson(keySettings, settings);
       return value;
     }
   };
