@@ -15,10 +15,10 @@ pages_build_output_dir = "public"
 # IMAGE_MAX_SIZE_MB = "10"              # 单张图片最大 MB
 #
 # 使用 D1 存评分/历史数据时，取消下面注释并替换 database_id：
-[[d1_databases]]
-binding = "DB"
-database_name = "product-review-db"
-database_id = "5a553594-8a1d-437e-b719-6ed707338252"
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "product-review-db"
+# database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
 #
 # 使用 KV 存评分/历史数据时，取消下面注释并替换 id：
 # [[kv_namespaces]]

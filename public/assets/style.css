@@ -253,7 +253,7 @@ button, a.ghost {
 
 .score-carousel {
   display: flex;
-  overflow-x: auto;
+  overflow-x: hidden;
   overflow-y: hidden;
   scroll-snap-type: x mandatory;
   scroll-behavior: smooth;
@@ -262,8 +262,8 @@ button, a.ghost {
   background: #f8fafc;
   -webkit-overflow-scrolling: touch;
 }
-.score-carousel::-webkit-scrollbar { height: 8px; }
-.score-carousel::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 999px; }
+.score-carousel::-webkit-scrollbar { display: none; }
+.score-carousel { scrollbar-width: none; overscroll-behavior-x: contain; }
 
 .score-slide {
   flex: 0 0 100%;
@@ -376,6 +376,7 @@ button, a.ghost {
 }
 .slide-dot.active { background: var(--primary); width: 24px; }
 .slide-dot.saved { box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.18); }
+.slide-dot:disabled { opacity: 0.35; cursor: not-allowed; }
 
 .score-actions {
   display: flex;
@@ -591,5 +592,67 @@ button, a.ghost {
   .file-input {
     max-width: none;
     width: 100%;
+  }
+}
+
+button:disabled,
+button.disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.page-bottom-nav {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: minmax(110px, 0.35fr) minmax(0, 1fr);
+  gap: 10px;
+  background: #eef2f7;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 10px;
+}
+
+.bottom-nav-btn {
+  min-height: 48px;
+  border-radius: 12px;
+  background: #d1d5db;
+  color: #ffffff;
+  font-size: 15px;
+}
+
+.bottom-nav-btn:not(:disabled):hover {
+  filter: brightness(0.96);
+}
+
+.primary-bottom {
+  background: var(--primary);
+  color: #ffffff;
+}
+
+@media (max-width: 680px) {
+  .score-card {
+    padding-bottom: calc(96px + env(safe-area-inset-bottom));
+  }
+
+  .page-bottom-nav {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 20;
+    margin: 0;
+    border-radius: 0;
+    border-left: 0;
+    border-right: 0;
+    border-bottom: 0;
+    padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
+    background: rgba(203, 213, 225, 0.96);
+    backdrop-filter: blur(10px);
+    box-shadow: 0 -8px 24px rgba(15, 23, 42, 0.12);
+  }
+
+  .bottom-nav-btn {
+    min-height: 54px;
+    font-size: 16px;
   }
 }

@@ -72,7 +72,7 @@ function adminHtml(adminPath) {
         <div class="section-title score-title">
           <div>
             <h2>手机滑动评分</h2>
-            <p class="tip">每个款式独立一页，手机可左右滑动切换，评分项可直接拖动滑块。</p>
+            <p class="tip">每个款式独立一页，当前款资料和评分填写完整后，“下一页”才会亮起；进入下一款时系统会自动保存当前款。</p>
           </div>
           <div class="admin-count no-print">
             <label>
@@ -89,17 +89,20 @@ function adminHtml(adminPath) {
             <strong id="slideCounter">第 1 / 1 款</strong>
             <span id="slideHint">左右滑动可切换款式</span>
           </div>
-          <button id="nextSlideBtn" class="ghost" type="button">下一款</button>
+          <button id="nextSlideBtn" class="ghost" type="button" disabled>下一页</button>
         </div>
 
         <div id="scoreCarousel" class="score-carousel" aria-live="polite"></div>
         <div id="slideDots" class="slide-dots no-print"></div>
 
         <div class="score-actions no-print">
-          <button id="saveCurrentBtn" class="primary" type="button">保存当前款</button>
-          <button id="saveAllBtn" class="primary-light" type="button">保存全部已填写款</button>
           <button id="clearCurrentBtn" class="ghost" type="button">清空当前页</button>
           <button id="newBatchBtn" class="ghost" type="button">重新开始本次评分</button>
+        </div>
+
+        <div class="page-bottom-nav no-print" role="navigation" aria-label="款式分页操作">
+          <button id="bottomPrevBtn" class="bottom-nav-btn" type="button">上一页</button>
+          <button id="bottomSaveNextBtn" class="bottom-nav-btn primary-bottom" type="button" disabled>下一页</button>
         </div>
       </section>
 

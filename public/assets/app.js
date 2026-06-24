@@ -16,6 +16,11 @@ const slideDots = $('#slideDots');
 const slideCounter = $('#slideCounter');
 const slideHint = $('#slideHint');
 const pageCountInput = $('#pageCountInput');
+const prevSlideBtn = $('#prevSlideBtn');
+const nextSlideBtn = $('#nextSlideBtn');
+const saveAndNextBtn = $('#saveAndNextBtn');
+const bottomPrevBtn = $('#bottomPrevBtn');
+const bottomSaveNextBtn = $('#bottomSaveNextBtn');
 
 let items = [];
 let drafts = [];
@@ -145,6 +150,7 @@ async function uploadImageFile(file, index) {
   const preview = slide?.querySelector('[data-image-preview]');
   if (preview) preview.innerHTML = `<img class="image-preview" src="${escapeHtml(url)}" alt="产品图预览" />`;
   showMessage('图片已上传，并已填入产品图链接');
+  if (index === currentIndex) updateSlideStatus();
 }
 
 function ensureDraftCount(count) {
@@ -181,6 +187,22 @@ function draftHasContent(draft) {
     String(draft.remark || '').trim() ||
     scoreFields.some(({ key }) => Number(draft[key] || 0) > 0)
   );
+}
+
+function getDraftMissingFields(draft) {
+  const missing = [];
+  if (!String(draft?.style_code || '').trim()) missing.push('款式编码');
+  if (!String(draft?.season || '').trim()) missing.push('季节');
+  if (!String(draft?.base_price ?? '').trim()) missing.push('基本售价');
+  if (!String(draft?.reviewer || '').trim()) missing.push('评审人');
+  if (!String(draft?.review_date || '').trim()) missing.push('评审日期');
+  const noScore = scoreFields.filter(({ key }) => Number(draft?.[key] || 0) <= 0).map(({ label }) => label);
+  if (noScore.length) missing.push(`${noScore.length} 个评分项`);
+  return missing;
+}
+
+function isDraftComplete(draft) {
+  return getDraftMissingFields(draft).length === 0;
 }
 
 function escapeHtml(text) {
@@ -225,24 +247,24 @@ function renderSlides() {
             <input data-field="style_code" value="${escapeHtml(draft.style_code)}" placeholder="例如 XA2408A" />
           </label>
           <label>
-            季节
+            季节 <span class="required">*</span>
             <input data-field="season" value="${escapeHtml(draft.season)}" placeholder="例如 秋冬 / 春夏" />
           </label>
           <label>
-            基本售价
+            基本售价 <span class="required">*</span>
             <input data-field="base_price" type="number" step="0.01" min="0" value="${escapeHtml(draft.base_price)}" placeholder="例如 138" />
           </label>
           <label>
-            评审人
+            评审人 <span class="required">*</span>
             <input data-field="reviewer" value="${escapeHtml(draft.reviewer)}" placeholder="评审人姓名" />
           </label>
           <label>
-            评审日期
+            评审日期 <span class="required">*</span>
             <input data-field="review_date" type="date" value="${escapeHtml(draft.review_date || today())}" />
           </label>
 
           <fieldset class="mobile-score-panel">
-            <legend>滑动评分，每项 0-10 分</legend>
+            <legend>滑动评分，每项 0-10 分 <span class="required">*</span></legend>
             ${scoreFields.map(({ key, label }) => `
               <label class="score-row">
                 <span>${label}</span>
@@ -280,10 +302,38 @@ function renderSlides() {
 function updateSlideStatus() {
   slideCounter.textContent = `第 ${currentIndex + 1} / ${pageCount} 款`;
   const draft = drafts[currentIndex];
-  slideHint.textContent = draft?.id ? `当前页正在编辑：${draft.style_code || `记录 #${draft.id}`}` : '左右滑动可切换款式';
+  const missing = getDraftMissingFields(draft);
+  const complete = missing.length === 0;
+  slideHint.textContent = draft?.id
+    ? (complete ? `当前页可进入下一款：${draft.style_code || `记录 #${draft.id}`}` : `当前页正在编辑，还缺：${missing.join('、')}`)
+    : (complete ? '当前款已填写完整，可以进入下一款' : `填写完整后才能进入下一款，还缺：${missing.join('、')}`);
+
+  const isFirst = currentIndex === 0;
+  const isLast = currentIndex === pageCount - 1;
+  [prevSlideBtn, bottomPrevBtn].forEach((btn) => {
+    if (!btn) return;
+    btn.disabled = isFirst;
+    btn.classList.toggle('disabled', isFirst);
+  });
+
+  const nextDisabled = !complete;
+  [nextSlideBtn, bottomSaveNextBtn, saveAndNextBtn].forEach((btn) => {
+    if (!btn) return;
+    btn.disabled = nextDisabled;
+    btn.classList.toggle('disabled', nextDisabled);
+    btn.title = nextDisabled ? `请先填写完整：${missing.join('、')}` : '';
+  });
+
+  const nextLabel = isLast ? '完成' : '下一页';
+  [nextSlideBtn, saveAndNextBtn, bottomSaveNextBtn].forEach((btn) => {
+    if (btn) btn.textContent = nextLabel;
+  });
+
   $$('.slide-dot').forEach((dot, index) => {
     dot.classList.toggle('active', index === currentIndex);
     dot.classList.toggle('saved', Boolean(drafts[index]?.id));
+    dot.disabled = index > currentIndex && !complete;
+    dot.classList.toggle('disabled', dot.disabled);
   });
 }
 
@@ -295,11 +345,19 @@ function updateSlideTotal(index) {
   slide.querySelector('[data-role="grade"]').textContent = drafts[index].grade;
 }
 
-function goToSlide(index, smooth = true) {
-  currentIndex = Math.max(0, Math.min(pageCount - 1, index));
+function goToSlide(index, smooth = true, force = false) {
+  const target = Math.max(0, Math.min(pageCount - 1, index));
+  if (!force && target > currentIndex && !isDraftComplete(drafts[currentIndex])) {
+    const missing = getDraftMissingFields(drafts[currentIndex]);
+    showMessage(`请先填写完整当前款：${missing.join('、')}`, 'error');
+    updateSlideStatus();
+    return false;
+  }
+  currentIndex = target;
   const slideWidth = scoreCarousel.clientWidth || 1;
   scoreCarousel.scrollTo({ left: slideWidth * currentIndex, behavior: smooth ? 'smooth' : 'auto' });
   updateSlideStatus();
+  return true;
 }
 
 function setActiveTab(targetId) {
@@ -339,6 +397,31 @@ async function saveDraft(index, silent = false) {
   renderSlides();
   await loadItems();
   return result.item;
+}
+
+async function autoSaveAndGoNext() {
+  const savingIndex = currentIndex;
+  const missing = getDraftMissingFields(drafts[savingIndex]);
+  if (missing.length) {
+    showMessage(`请先填写完整当前款：${missing.join('、')}`, 'error');
+    updateSlideStatus();
+    return;
+  }
+
+  try {
+    await saveDraft(savingIndex, true);
+    if (savingIndex < pageCount - 1) {
+      const nextIndex = savingIndex + 1;
+      currentIndex = savingIndex;
+      goToSlide(nextIndex, true, true);
+      showMessage(`第 ${savingIndex + 1} 款已自动保存，已进入第 ${nextIndex + 1} 款`);
+    } else {
+      showMessage('最后一款已自动保存，本批评分已完成');
+      setActiveTab('listSection');
+    }
+  } catch (e) {
+    showMessage(e.message, 'error');
+  }
 }
 
 function clearDraft(index) {
@@ -493,6 +576,7 @@ scoreCarousel.addEventListener('input', (event) => {
     input.nextElementSibling.textContent = input.value;
     updateSlideTotal(index);
   }
+  if (index === currentIndex) updateSlideStatus();
 });
 
 scoreCarousel.addEventListener('change', async (event) => {
@@ -518,6 +602,7 @@ scoreCarousel.addEventListener('change', async (event) => {
   const index = Number(slide.dataset.index);
   const field = input.dataset.field;
   drafts[index][field] = input.value;
+  if (index === currentIndex) updateSlideStatus();
 });
 
 scoreCarousel.addEventListener('scroll', () => {
@@ -525,19 +610,27 @@ scoreCarousel.addEventListener('scroll', () => {
   window.clearTimeout(scrollTimer);
   scrollTimer = window.setTimeout(() => {
     const slideWidth = scoreCarousel.clientWidth || 1;
-    currentIndex = Math.max(0, Math.min(pageCount - 1, Math.round(scoreCarousel.scrollLeft / slideWidth)));
+    const targetIndex = Math.max(0, Math.min(pageCount - 1, Math.round(scoreCarousel.scrollLeft / slideWidth)));
+    if (targetIndex > currentIndex && !isDraftComplete(drafts[currentIndex])) {
+      goToSlide(currentIndex, false, true);
+      return;
+    }
+    currentIndex = targetIndex;
     updateSlideStatus();
   }, 80);
 });
 
-$('#prevSlideBtn').addEventListener('click', () => goToSlide(currentIndex - 1));
-$('#nextSlideBtn').addEventListener('click', () => goToSlide(currentIndex + 1));
+prevSlideBtn?.addEventListener('click', () => goToSlide(currentIndex - 1));
+nextSlideBtn?.addEventListener('click', autoSaveAndGoNext);
+bottomPrevBtn?.addEventListener('click', () => goToSlide(currentIndex - 1));
+saveAndNextBtn?.addEventListener('click', autoSaveAndGoNext);
+bottomSaveNextBtn?.addEventListener('click', autoSaveAndGoNext);
 slideDots.addEventListener('click', (event) => {
   const btn = event.target.closest('.slide-dot');
-  if (btn) goToSlide(Number(btn.dataset.index));
+  if (btn && !btn.disabled) goToSlide(Number(btn.dataset.index));
 });
 
-$('#saveCurrentBtn').addEventListener('click', async () => {
+$('#saveCurrentBtn')?.addEventListener('click', async () => {
   try {
     await saveDraft(currentIndex);
   } catch (e) {
@@ -545,7 +638,7 @@ $('#saveCurrentBtn').addEventListener('click', async () => {
   }
 });
 
-$('#saveAllBtn').addEventListener('click', async () => {
+$('#saveAllBtn')?.addEventListener('click', async () => {
   try {
     let saved = 0;
     for (let i = 0; i < drafts.length; i++) {
@@ -611,7 +704,7 @@ itemsBody.addEventListener('click', async (event) => {
     renderSlides();
     setActiveTab('scoreSection');
     $('#scoreSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    showMessage('已载入到第 1 款页面，可修改后保存当前款');
+    showMessage('已载入到第 1 款页面，填写完整后点击下一页会自动更新');
     return;
   }
 
