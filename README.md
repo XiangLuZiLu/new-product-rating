@@ -218,3 +218,17 @@ IMAGE_STORAGE_DRIVER=s3
 1. 可以直接粘贴图片 URL；
 2. 也可以选择本地图片，系统会自动上传到你配置的 R2/S3/OSS；
 3. 保存记录时，D1/KV/自定义数据库只保存图片地址。
+
+
+## Cloudflare Pages 后台配置版说明
+
+本版本已删除 `wrangler.toml`，适合通过 Cloudflare Pages 控制台管理所有配置。
+
+导入 GitHub 部署时：
+
+- Framework preset：None
+- Build command：留空，或 `echo no build needed`
+- Build output directory：`public`
+- Root directory：仓库根目录就留空；如果项目在子目录，填写子目录名
+
+D1、R2、KV、环境变量、Secrets 都在 Cloudflare Pages 项目的 Settings 里配置，不要写到仓库文件里。详细步骤见 `docs/CF_PAGES_DASHBOARD_SETUP.md`。
