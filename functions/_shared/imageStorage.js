@@ -1,3 +1,5 @@
+import { getStorage, imageSettingsFromEnv, normalizeImageSettings } from './storage.js';
+
 const encoder = new TextEncoder();
 
 function jsonError(message, status = 400) {
@@ -6,13 +8,25 @@ function jsonError(message, status = 400) {
   return error;
 }
 
-function normalizeImageDriver(env) {
-  return String(env.IMAGE_STORAGE_DRIVER || env.IMAGE_DRIVER || 'url').trim().toLowerCase();
+function normalizeImageDriver(config) {
+  return String(config.driver || 'url').trim().toLowerCase();
 }
 
-function getMaxBytes(env) {
-  const mb = Number(env.IMAGE_MAX_SIZE_MB || 10);
+function getMaxBytes(config) {
+  const mb = Number(config.image_max_size_mb || 10);
   return Math.max(1, Math.min(50, Number.isFinite(mb) ? mb : 10)) * 1024 * 1024;
+}
+
+async function resolveImageSettings(env) {
+  try {
+    const storage = getStorage(env);
+    if (storage && typeof storage.getImageSettings === 'function') {
+      return normalizeImageSettings(await storage.getImageSettings(), imageSettingsFromEnv(env));
+    }
+  } catch (_) {
+    // 数据库暂不可用时，退回到环境变量，方便排错和迁移。
+  }
+  return imageSettingsFromEnv(env);
 }
 
 function safeExt(filename = '', contentType = '') {
@@ -32,8 +46,8 @@ function safeBaseName(filename = 'image') {
   return name || 'image';
 }
 
-function buildObjectKey(file, env) {
-  const prefix = String(env.IMAGE_KEY_PREFIX || 'review-images')
+function buildObjectKey(file, config) {
+  const prefix = String(config.image_key_prefix || 'review-images')
     .trim()
     .replace(/[^a-zA-Z0-9_-]+/g, '-')
     .replace(/^-+|-+$/g, '') || 'review-images';
@@ -49,9 +63,10 @@ function withTrailingSlash(value) {
 }
 
 export async function uploadImageFromRequest(request, env) {
-  const driver = normalizeImageDriver(env);
+  const config = await resolveImageSettings(env);
+  const driver = normalizeImageDriver(config);
   if (driver === 'url' || driver === 'none' || driver === 'disabled') {
-    throw jsonError('当前未启用图片上传。请配置 IMAGE_STORAGE_DRIVER=r2 或 s3。', 400);
+    throw jsonError('当前未启用图片上传。请在后台「图片存储配置」里选择 R2 或 S3兼容OSS。', 400);
   }
 
   const form = await request.formData();
@@ -59,25 +74,23 @@ export async function uploadImageFromRequest(request, env) {
   if (!(file instanceof File)) throw jsonError('请上传图片文件字段 file', 400);
   if (!String(file.type || '').startsWith('image/')) throw jsonError('只能上传图片文件', 400);
   if (file.size <= 0) throw jsonError('图片文件为空', 400);
-  const maxBytes = getMaxBytes(env);
+  const maxBytes = getMaxBytes(config);
   if (file.size > maxBytes) throw jsonError(`图片不能超过 ${Math.round(maxBytes / 1024 / 1024)}MB`, 400);
 
-  const key = buildObjectKey(file, env);
+  const key = buildObjectKey(file, config);
   const bytes = await file.arrayBuffer();
   const contentType = file.type || 'application/octet-stream';
 
-  if (driver === 'r2') return uploadToR2(env, key, bytes, contentType);
-  if (['s3', 'oss', 'cos', 'minio', 'qiniu', 'qiniu-s3', 'aws-s3'].includes(driver)) {
-    return uploadToS3(env, key, bytes, contentType);
-  }
+  if (driver === 'r2') return uploadToR2(env, config, key, bytes, contentType);
+  if (driver === 's3') return uploadToS3(config, key, bytes, contentType);
 
   throw jsonError(`不支持的图片存储方式：${driver}`, 400);
 }
 
-async function uploadToR2(env, key, bytes, contentType) {
+async function uploadToR2(env, config, key, bytes, contentType) {
   const bucket = env.IMAGE_BUCKET || env.R2_BUCKET;
   if (!bucket || typeof bucket.put !== 'function') {
-    throw jsonError('当前使用 R2 图片存储，但未绑定 R2 bucket。请在 wrangler.toml 或 Pages 设置中绑定 IMAGE_BUCKET。', 500);
+    throw jsonError('当前使用 R2 图片存储，但未在 Cloudflare Pages 后台绑定 R2 bucket。请绑定变量名 IMAGE_BUCKET。', 500);
   }
 
   await bucket.put(key, bytes, {
@@ -87,21 +100,21 @@ async function uploadToR2(env, key, bytes, contentType) {
     }
   });
 
-  const publicBase = withTrailingSlash(env.PUBLIC_IMAGE_BASE_URL || env.R2_PUBLIC_BASE_URL || env.IMAGE_PUBLIC_BASE_URL);
+  const publicBase = withTrailingSlash(config.public_image_base_url);
   const url = publicBase ? `${publicBase}/${encodeURI(key)}` : `/api/images/${encodeURIComponent(key)}`;
   return { key, url, storage: 'r2' };
 }
 
-async function uploadToS3(env, key, bytes, contentType) {
-  const endpoint = withTrailingSlash(env.S3_ENDPOINT || env.OSS_ENDPOINT || env.IMAGE_S3_ENDPOINT);
-  const bucket = String(env.S3_BUCKET || env.OSS_BUCKET || env.IMAGE_S3_BUCKET || '').trim();
-  const region = String(env.S3_REGION || env.OSS_REGION || 'us-east-1').trim() || 'us-east-1';
-  const accessKeyId = String(env.S3_ACCESS_KEY_ID || env.OSS_ACCESS_KEY_ID || '').trim();
-  const secretAccessKey = String(env.S3_SECRET_ACCESS_KEY || env.OSS_SECRET_ACCESS_KEY || '').trim();
-  const forcePathStyle = String(env.S3_FORCE_PATH_STYLE ?? 'true').toLowerCase() !== 'false';
+async function uploadToS3(config, key, bytes, contentType) {
+  const endpoint = withTrailingSlash(config.s3_endpoint);
+  const bucket = String(config.s3_bucket || '').trim();
+  const region = String(config.s3_region || 'us-east-1').trim() || 'us-east-1';
+  const accessKeyId = String(config.s3_access_key_id || '').trim();
+  const secretAccessKey = String(config.s3_secret_access_key || '').trim();
+  const forcePathStyle = config.s3_force_path_style !== false;
 
   if (!endpoint || !bucket || !accessKeyId || !secretAccessKey) {
-    throw jsonError('当前使用 S3/OSS 图片存储，但缺少 S3_ENDPOINT、S3_BUCKET、S3_ACCESS_KEY_ID 或 S3_SECRET_ACCESS_KEY。', 500);
+    throw jsonError('当前使用 S3/OSS 图片存储，但页面配置里缺少 Endpoint、Bucket、AccessKey 或 SecretKey。', 500);
   }
 
   const url = buildS3ObjectUrl(endpoint, bucket, key, forcePathStyle);
@@ -117,7 +130,7 @@ async function uploadToS3(env, key, bytes, contentType) {
     throw jsonError(`图片上传到 S3/OSS 失败：${response.status} ${text.slice(0, 200)}`, 502);
   }
 
-  const publicBase = withTrailingSlash(env.S3_PUBLIC_BASE_URL || env.OSS_PUBLIC_BASE_URL || env.IMAGE_PUBLIC_BASE_URL);
+  const publicBase = withTrailingSlash(config.public_image_base_url);
   const publicUrl = publicBase ? `${publicBase}/${encodeURI(key)}` : url.toString();
   return { key, url: publicUrl, storage: 's3' };
 }

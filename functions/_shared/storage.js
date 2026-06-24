@@ -6,6 +6,86 @@ export const DEFAULT_SCORE_FIELDS = [
   { id: 'comfort', key: 'comfort_score', label: '背负舒适度', max_score: 10 }
 ];
 
+
+export const DEFAULT_IMAGE_SETTINGS = {
+  driver: 'url',
+  image_max_size_mb: 10,
+  image_key_prefix: 'review-images',
+  public_image_base_url: '',
+  s3_endpoint: '',
+  s3_bucket: '',
+  s3_region: 'us-east-1',
+  s3_access_key_id: '',
+  s3_secret_access_key: '',
+  s3_force_path_style: true
+};
+
+function normalizeImageDriverValue(value) {
+  const raw = String(value || 'url').trim().toLowerCase();
+  if (['r2', 'cloudflare-r2'].includes(raw)) return 'r2';
+  if (['s3', 'oss', 'cos', 'minio', 'qiniu', 'qiniu-s3', 'aws-s3'].includes(raw)) return 's3';
+  return 'url';
+}
+
+function normalizeImageMaxSize(value) {
+  const n = Number(value ?? 10);
+  return Math.max(1, Math.min(50, Number.isFinite(n) ? Math.round(n) : 10));
+}
+
+function normalizeBoolSetting(value, fallback = true) {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value === 'boolean') return value;
+  const text = String(value).trim().toLowerCase();
+  if (['true', '1', 'yes', 'y', 'on'].includes(text)) return true;
+  if (['false', '0', 'no', 'n', 'off'].includes(text)) return false;
+  return fallback;
+}
+
+export function imageSettingsFromEnv(env = {}) {
+  return normalizeImageSettings({
+    driver: env.IMAGE_STORAGE_DRIVER || env.IMAGE_DRIVER || 'url',
+    image_max_size_mb: env.IMAGE_MAX_SIZE_MB || 10,
+    image_key_prefix: env.IMAGE_KEY_PREFIX || 'review-images',
+    public_image_base_url: env.PUBLIC_IMAGE_BASE_URL || env.R2_PUBLIC_BASE_URL || env.IMAGE_PUBLIC_BASE_URL || env.S3_PUBLIC_BASE_URL || env.OSS_PUBLIC_BASE_URL || '',
+    s3_endpoint: env.S3_ENDPOINT || env.OSS_ENDPOINT || env.IMAGE_S3_ENDPOINT || '',
+    s3_bucket: env.S3_BUCKET || env.OSS_BUCKET || env.IMAGE_S3_BUCKET || '',
+    s3_region: env.S3_REGION || env.OSS_REGION || 'us-east-1',
+    s3_access_key_id: env.S3_ACCESS_KEY_ID || env.OSS_ACCESS_KEY_ID || '',
+    s3_secret_access_key: env.S3_SECRET_ACCESS_KEY || env.OSS_SECRET_ACCESS_KEY || '',
+    s3_force_path_style: env.S3_FORCE_PATH_STYLE ?? true
+  });
+}
+
+export function normalizeImageSettings(value = {}, previous = DEFAULT_IMAGE_SETTINGS) {
+  let input = value;
+  if (typeof value === 'string') {
+    try { input = JSON.parse(value); } catch { input = {}; }
+  }
+  if (!input || typeof input !== 'object') input = {};
+  let prev = previous;
+  if (typeof previous === 'string') {
+    try { prev = JSON.parse(previous); } catch { prev = DEFAULT_IMAGE_SETTINGS; }
+  }
+  if (!prev || typeof prev !== 'object') prev = DEFAULT_IMAGE_SETTINGS;
+  const keepSecretTokens = new Set(['********', '••••••••', '__KEEP__', '__SECRET_SET__']);
+  const secretInput = input.s3_secret_access_key ?? input.S3_SECRET_ACCESS_KEY ?? input.oss_secret_access_key;
+  const secret = secretInput === undefined || keepSecretTokens.has(String(secretInput))
+    ? String(prev.s3_secret_access_key || '')
+    : String(secretInput || '').trim();
+  return {
+    driver: normalizeImageDriverValue(input.driver ?? input.image_storage_driver ?? input.IMAGE_STORAGE_DRIVER ?? prev.driver),
+    image_max_size_mb: normalizeImageMaxSize(input.image_max_size_mb ?? input.max_size_mb ?? input.IMAGE_MAX_SIZE_MB ?? prev.image_max_size_mb),
+    image_key_prefix: String(input.image_key_prefix ?? input.key_prefix ?? input.IMAGE_KEY_PREFIX ?? prev.image_key_prefix ?? 'review-images').trim().replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'review-images',
+    public_image_base_url: String(input.public_image_base_url ?? input.public_base_url ?? input.PUBLIC_IMAGE_BASE_URL ?? input.S3_PUBLIC_BASE_URL ?? prev.public_image_base_url ?? '').trim().replace(/\/+$/, ''),
+    s3_endpoint: String(input.s3_endpoint ?? input.S3_ENDPOINT ?? input.oss_endpoint ?? prev.s3_endpoint ?? '').trim().replace(/\/+$/, ''),
+    s3_bucket: String(input.s3_bucket ?? input.S3_BUCKET ?? input.oss_bucket ?? prev.s3_bucket ?? '').trim(),
+    s3_region: String(input.s3_region ?? input.S3_REGION ?? input.oss_region ?? prev.s3_region ?? 'us-east-1').trim() || 'us-east-1',
+    s3_access_key_id: String(input.s3_access_key_id ?? input.S3_ACCESS_KEY_ID ?? input.oss_access_key_id ?? prev.s3_access_key_id ?? '').trim(),
+    s3_secret_access_key: secret,
+    s3_force_path_style: normalizeBoolSetting(input.s3_force_path_style ?? input.S3_FORCE_PATH_STYLE ?? prev.s3_force_path_style, true)
+  };
+}
+
 const LEGACY_KEYS = DEFAULT_SCORE_FIELDS.map(item => item.key);
 const LEGACY_KEY_BY_ID = Object.fromEntries(DEFAULT_SCORE_FIELDS.map(item => [item.id, item.key]));
 const LEGACY_ID_BY_KEY = Object.fromEntries(DEFAULT_SCORE_FIELDS.map(item => [item.key, item.id]));
@@ -487,6 +567,19 @@ function createD1Storage(env) {
       const normalized = normalizeScoreFields(fields);
       await setSetting('score_fields', JSON.stringify(normalized));
       return normalized;
+    },
+
+    async getImageSettings() {
+      const value = await getSetting('image_storage_settings', null);
+      return normalizeImageSettings(value || {}, imageSettingsFromEnv(env));
+    },
+
+    async setImageSettings(settings) {
+      const currentValue = await getSetting('image_storage_settings', null);
+      const current = normalizeImageSettings(currentValue || {}, imageSettingsFromEnv(env));
+      const normalized = normalizeImageSettings(settings, current);
+      await setSetting('image_storage_settings', JSON.stringify(normalized));
+      return normalized;
     }
   };
 }
@@ -617,7 +710,9 @@ function createKVStorage(env) {
     async getScorePageCount() { const s = await getSettings(); return safeCount(s.score_page_count || '3', 3); },
     async setScorePageCount(count) { const s = await getSettings(); s.score_page_count = safeCount(count, 1); await setSettings(s); return s.score_page_count; },
     async getScoreFields() { return getScoreFields(); },
-    async setScoreFields(fields) { const s = await getSettings(); s.score_fields = normalizeScoreFields(fields); await setSettings(s); return s.score_fields; }
+    async setScoreFields(fields) { const s = await getSettings(); s.score_fields = normalizeScoreFields(fields); await setSettings(s); return s.score_fields; },
+    async getImageSettings() { const s = await getSettings(); return normalizeImageSettings(s.image_storage_settings || {}, imageSettingsFromEnv(env)); },
+    async setImageSettings(settings) { const s = await getSettings(); const current = normalizeImageSettings(s.image_storage_settings || {}, imageSettingsFromEnv(env)); s.image_storage_settings = normalizeImageSettings(settings, current); await setSettings(s); return s.image_storage_settings; }
   };
 }
 
@@ -648,6 +743,8 @@ function createHttpStorage(env) {
     async getScorePageCount() { return Number((await call('/settings')).settings?.score_page_count || 3); },
     async setScorePageCount(count) { return Number((await call('/settings', { method: 'PUT', body: JSON.stringify({ score_page_count: count }) })).settings?.score_page_count || count); },
     async getScoreFields() { return normalizeScoreFields((await call('/settings')).settings?.score_fields || DEFAULT_SCORE_FIELDS); },
-    async setScoreFields(fields) { return normalizeScoreFields((await call('/settings', { method: 'PUT', body: JSON.stringify({ score_fields: normalizeScoreFields(fields) }) })).settings?.score_fields || fields); }
+    async setScoreFields(fields) { return normalizeScoreFields((await call('/settings', { method: 'PUT', body: JSON.stringify({ score_fields: normalizeScoreFields(fields) }) })).settings?.score_fields || fields); },
+    async getImageSettings() { return normalizeImageSettings((await call('/settings')).settings?.image_settings || {}, imageSettingsFromEnv(env)); },
+    async setImageSettings(settings) { return normalizeImageSettings((await call('/settings', { method: 'PUT', body: JSON.stringify({ image_settings: settings }) })).settings?.image_settings || settings, imageSettingsFromEnv(env)); }
   };
 }

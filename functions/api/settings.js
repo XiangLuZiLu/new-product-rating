@@ -1,4 +1,4 @@
-import { getStorage, normalizeScoreFields } from '../_shared/storage.js';
+import { getStorage, normalizeScoreFields, normalizeImageSettings } from '../_shared/storage.js';
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -7,12 +7,19 @@ function json(data, status = 200) {
   });
 }
 
+function redactImageSettings(settings = {}) {
+  const copy = { ...settings };
+  if (copy.s3_secret_access_key) copy.s3_secret_access_key = '********';
+  return copy;
+}
+
 export async function onRequestGet({ env }) {
   try {
     const storage = getStorage(env);
     const scorePageCount = await storage.getScorePageCount();
     const scoreFields = await storage.getScoreFields();
-    return json({ ok: true, settings: { score_page_count: scorePageCount, score_fields: scoreFields } });
+    const imageSettings = storage.getImageSettings ? await storage.getImageSettings() : normalizeImageSettings({});
+    return json({ ok: true, settings: { score_page_count: scorePageCount, score_fields: scoreFields, image_settings: redactImageSettings(imageSettings) } });
   } catch (e) {
     return json({ ok: false, message: e.message || '读取设置失败' }, e.status || 500);
   }
@@ -32,6 +39,12 @@ export async function onRequestPut({ request, env }) {
       settings.score_fields = await storage.setScoreFields(normalizeScoreFields(payload.score_fields));
     } else {
       settings.score_fields = await storage.getScoreFields();
+    }
+    if (payload.image_settings !== undefined) {
+      if (!storage.setImageSettings) throw new Error('当前数据存储方式暂不支持页面保存图片存储配置');
+      settings.image_settings = redactImageSettings(await storage.setImageSettings(payload.image_settings));
+    } else if (storage.getImageSettings) {
+      settings.image_settings = redactImageSettings(await storage.getImageSettings());
     }
     return json({ ok: true, settings });
   } catch (e) {

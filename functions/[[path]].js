@@ -16,7 +16,7 @@ function adminHtml(adminPath, sessionIdleMinutes) {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>新品评审后台</title>
-  <link rel="stylesheet" href="/assets/style.css?v=20260624-submit-group-v1" />
+  <link rel="stylesheet" href="/assets/style.css?v=20260624-oss-page-settings-v1" />
 </head>
 <body>
   <div class="page-bg"></div>
@@ -59,6 +59,38 @@ function adminHtml(adminPath, sessionIdleMinutes) {
       </nav>
 
       <section id="styleSection" class="card list-card">
+      <section class="card nested-card no-print">
+          <div class="section-title">
+            <div>
+              <h2>图片存储配置</h2>
+              <p class="tip">图片存储方式在这里配置，减少 Cloudflare 环境变量数量。R2 仍需要在 Pages 后台绑定 IMAGE_BUCKET；七牛云/OSS/COS 等 S3 兼容参数可直接填在这里。</p>
+            </div>
+            <div class="form-actions">
+              <button id="saveImageSettingsBtn" class="primary" type="submit" form="imageStorageForm">保存图片配置</button>
+            </div>
+          </div>
+          <form id="imageStorageForm" class="image-settings-form">
+            <label>图片存储方式
+              <select name="driver">
+                <option value="url">只粘贴图片链接</option>
+                <option value="r2">Cloudflare R2</option>
+                <option value="s3">S3兼容OSS / 七牛云 / 阿里云OSS / 腾讯云COS</option>
+              </select>
+            </label>
+            <label>上传大小上限MB<input name="image_max_size_mb" type="number" min="1" max="50" step="1" placeholder="10" /></label>
+            <label>文件名前缀<input name="image_key_prefix" placeholder="review-images" /></label>
+            <label class="wide">图片公开访问域名<input name="public_image_base_url" placeholder="https://img.example.com，可不填；R2不填时走 /api/images" /></label>
+            <div class="s3-settings wide">
+              <label>S3 Endpoint<input name="s3_endpoint" placeholder="例如 https://s3-cn-east-1.qiniucs.com" /></label>
+              <label>Bucket / 空间名<input name="s3_bucket" placeholder="你的 Bucket 或七牛空间名" /></label>
+              <label>Region / 区域<input name="s3_region" placeholder="例如 cn-east-1 / oss-cn-guangzhou" /></label>
+              <label>AccessKey ID<input name="s3_access_key_id" autocomplete="off" /></label>
+              <label>SecretKey<input name="s3_secret_access_key" type="password" autocomplete="new-password" placeholder="留空表示不修改已有 SecretKey" /></label>
+              <label class="switch-label"><span>Path Style</span><input name="s3_force_path_style" type="checkbox" checked /></label>
+            </div>
+          </form>
+        </section>
+
         <section class="card nested-card no-print">
           <div class="section-title">
             <div>
@@ -165,7 +197,7 @@ function adminHtml(adminPath, sessionIdleMinutes) {
     </section>
   </main>
   <script>window.__ADMIN_PATH__ = ${JSON.stringify(adminPath)}; window.__SESSION_IDLE_MINUTES__ = ${JSON.stringify(sessionIdleMinutes)};</script>
-  <script src="/assets/admin.js?v=20260624-submit-group-v1" defer></script>
+  <script src="/assets/admin.js?v=20260624-oss-page-settings-v1" defer></script>
 </body>
 </html>`;
 }

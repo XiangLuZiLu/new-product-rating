@@ -1093,3 +1093,43 @@ button.disabled {
 @media print {
   .score-group-detail-row { display: table-row; }
 }
+
+/* 图片存储页面配置 */
+.image-settings-form {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+.image-settings-form > label {
+  grid-column: span 4;
+}
+.image-settings-form > .wide,
+.image-settings-form .s3-settings {
+  grid-column: 1 / -1;
+}
+.s3-settings {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 12px;
+  padding: 12px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 14px;
+  background: #f8fafc;
+}
+.s3-settings > label { grid-column: span 4; }
+.s3-settings > .switch-label { grid-column: span 4; }
+@media (max-width: 900px) {
+  .image-settings-form > label,
+  .s3-settings > label,
+  .s3-settings > .switch-label { grid-column: span 6; }
+}
+@media (max-width: 640px) {
+  .image-settings-form,
+  .s3-settings { grid-template-columns: 1fr; }
+  .image-settings-form > label,
+  .image-settings-form > .wide,
+  .s3-settings,
+  .s3-settings > label,
+  .s3-settings > .switch-label { grid-column: 1 / -1; }
+}

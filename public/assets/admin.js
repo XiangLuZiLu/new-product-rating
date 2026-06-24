@@ -1,4 +1,4 @@
-console.info("product-review admin version: 20260624-submit-group-v1");
+console.info("product-review admin version: 20260624-oss-page-settings-v1");
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
@@ -24,6 +24,8 @@ const cancelScoreEditBtn = $('#cancelScoreEditBtn');
 const scoreFieldList = $('#scoreFieldList');
 const addScoreFieldBtn = $('#addScoreFieldBtn');
 const saveScoreFieldsBtn = $('#saveScoreFieldsBtn');
+const imageStorageForm = $('#imageStorageForm');
+const saveImageSettingsBtn = $('#saveImageSettingsBtn');
 const styleDropZone = $('#styleDropZone');
 const styleImageFile = $('#styleImageFile');
 const stylePreview = $('#stylePreview');
@@ -222,6 +224,59 @@ function renderScoreFieldEditor() {
     </div>
   `).join('');
 }
+
+function normalizeImageSettingsLocal(settings = {}) {
+  return {
+    driver: String(settings.driver || 'url').trim().toLowerCase() || 'url',
+    image_max_size_mb: Number(settings.image_max_size_mb || 10),
+    image_key_prefix: String(settings.image_key_prefix || 'review-images').trim() || 'review-images',
+    public_image_base_url: String(settings.public_image_base_url || '').trim(),
+    s3_endpoint: String(settings.s3_endpoint || '').trim(),
+    s3_bucket: String(settings.s3_bucket || '').trim(),
+    s3_region: String(settings.s3_region || 'us-east-1').trim() || 'us-east-1',
+    s3_access_key_id: String(settings.s3_access_key_id || '').trim(),
+    s3_secret_access_key: String(settings.s3_secret_access_key || '').trim(),
+    s3_force_path_style: settings.s3_force_path_style !== false
+  };
+}
+function fillImageSettingsForm(settings = {}) {
+  if (!imageStorageForm) return;
+  const data = normalizeImageSettingsLocal(settings);
+  imageStorageForm.elements.driver.value = ['url', 'r2', 's3'].includes(data.driver) ? data.driver : 'url';
+  imageStorageForm.elements.image_max_size_mb.value = data.image_max_size_mb || 10;
+  imageStorageForm.elements.image_key_prefix.value = data.image_key_prefix || 'review-images';
+  imageStorageForm.elements.public_image_base_url.value = data.public_image_base_url || '';
+  imageStorageForm.elements.s3_endpoint.value = data.s3_endpoint || '';
+  imageStorageForm.elements.s3_bucket.value = data.s3_bucket || '';
+  imageStorageForm.elements.s3_region.value = data.s3_region || 'us-east-1';
+  imageStorageForm.elements.s3_access_key_id.value = data.s3_access_key_id || '';
+  imageStorageForm.elements.s3_secret_access_key.value = data.s3_secret_access_key === '********' ? '' : data.s3_secret_access_key || '';
+  imageStorageForm.elements.s3_force_path_style.checked = data.s3_force_path_style !== false;
+  toggleImageSettingsFields();
+}
+function readImageSettingsForm() {
+  const form = imageStorageForm;
+  if (!form) return {};
+  return {
+    driver: form.elements.driver.value,
+    image_max_size_mb: form.elements.image_max_size_mb.value,
+    image_key_prefix: form.elements.image_key_prefix.value.trim(),
+    public_image_base_url: form.elements.public_image_base_url.value.trim(),
+    s3_endpoint: form.elements.s3_endpoint.value.trim(),
+    s3_bucket: form.elements.s3_bucket.value.trim(),
+    s3_region: form.elements.s3_region.value.trim(),
+    s3_access_key_id: form.elements.s3_access_key_id.value.trim(),
+    s3_secret_access_key: form.elements.s3_secret_access_key.value,
+    s3_force_path_style: form.elements.s3_force_path_style.checked
+  };
+}
+function toggleImageSettingsFields() {
+  if (!imageStorageForm) return;
+  const driver = imageStorageForm.elements.driver.value;
+  const s3Box = imageStorageForm.querySelector('.s3-settings');
+  if (s3Box) s3Box.classList.toggle('hidden', driver !== 's3');
+}
+
 function readScoreFieldsFromEditor() {
   const rows = Array.from(scoreFieldList.querySelectorAll('.score-field-editor-row'));
   const fields = rows.map((row, index) => ({
@@ -435,6 +490,7 @@ async function loadSettings() {
   const data = await requestJson('/api/settings');
   scoreFields = normalizeScoreFieldsLocal(data.settings?.score_fields || defaultScoreFields);
   renderScoreFieldEditor();
+  fillImageSettingsForm(data.settings?.image_settings || {});
 }
 async function loadStyles() {
   const params = new URLSearchParams(new FormData(styleSearchForm));
@@ -526,6 +582,27 @@ logoutBtn.addEventListener('click', async () => {
   showLogin();
 });
 $$('.tab').forEach(tab => tab.addEventListener('click', () => setActiveTab(tab.dataset.target)));
+
+
+if (imageStorageForm) {
+  imageStorageForm.elements.driver.addEventListener('change', toggleImageSettingsFields);
+  imageStorageForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    setButtonBusy(saveImageSettingsBtn, true, '保存中...');
+    try {
+      const payload = readImageSettingsForm();
+      if (payload.driver === 's3' && !payload.s3_secret_access_key) payload.s3_secret_access_key = '********';
+      const data = await requestJson('/api/settings', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({ image_settings: payload })
+      });
+      fillImageSettingsForm(data.settings?.image_settings || payload);
+      showMessage('图片存储配置已保存');
+    } catch (e) { showMessage(e.message, 'error'); }
+    finally { setButtonBusy(saveImageSettingsBtn, false); }
+  });
+}
 
 addScoreFieldBtn.addEventListener('click', () => {
   scoreFields.push({ id: makeScoreFieldId(), label: `评分项${scoreFields.length + 1}`, max_score: 10 });
