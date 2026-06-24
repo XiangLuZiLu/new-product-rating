@@ -2,9 +2,23 @@ name = "product-review-pages"
 compatibility_date = "2026-06-24"
 pages_build_output_dir = "public"
 
-# 部署前请执行：npx wrangler d1 create product-review-db
-# 然后把输出的 database_id 替换到下面。
-[[d1_databases]]
-binding = "DB"
-database_name = "product-review-db"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+# 后台入口、账号、密码、存储方式建议在 Cloudflare Pages 控制台的
+# Settings -> Environment variables 中配置，不要写入公开仓库。
+#
+# 必填建议：
+# ADMIN_PATH = "review-admin-2026"       # 后台访问：域名/review-admin-2026
+# ADMIN_USERNAME = "admin"              # 后台账号
+# ADMIN_PASSWORD = "change-me"          # 后台密码，生产环境请用强密码
+# SESSION_SECRET = "long-random-string" # Cookie 签名密钥
+# STORAGE_DRIVER = "d1"                 # d1 或 http
+#
+# 使用 D1 时，取消下面注释并替换 database_id：
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "product-review-db"
+# database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+#
+# 使用自定义数据库 HTTP 接口时，不需要 D1 binding，改配：
+# STORAGE_DRIVER = "http"
+# STORAGE_API_URL = "https://your-api.example.com/product-review"
+# STORAGE_API_TOKEN = "your-api-token"

@@ -27,15 +27,21 @@ async function hmac(data, secret) {
 }
 
 function safeEqual(a, b) {
-  if (!a || !b || a.length !== b.length) return false;
+  const left = String(a ?? '');
+  const right = String(b ?? '');
+  if (!left || !right || left.length !== right.length) return false;
   let result = 0;
-  for (let i = 0; i < a.length; i++) result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  for (let i = 0; i < left.length; i++) result |= left.charCodeAt(i) ^ right.charCodeAt(i);
   return result === 0;
 }
 
-async function createToken(env) {
+function getAdminUsername(env) {
+  return String(env.ADMIN_USERNAME || 'admin');
+}
+
+async function createToken(env, username) {
   const secret = env.SESSION_SECRET || env.ADMIN_PASSWORD;
-  const payload = base64UrlEncode(JSON.stringify({ exp: Date.now() + 24 * 60 * 60 * 1000 }));
+  const payload = base64UrlEncode(JSON.stringify({ user: username, exp: Date.now() + 24 * 60 * 60 * 1000 }));
   const signature = await hmac(payload, secret);
   return `${payload}.${signature}`;
 }
@@ -50,11 +56,15 @@ export async function onRequestPost({ request, env }) {
     return json({ ok: false, message: '请求格式错误' }, 400);
   }
 
-  if (!safeEqual(String(body.password || ''), String(env.ADMIN_PASSWORD))) {
-    return json({ ok: false, message: '密码错误' }, 401);
+  const expectedUsername = getAdminUsername(env);
+  const inputUsername = String(body.username || '').trim();
+  const inputPassword = String(body.password || '');
+
+  if (!safeEqual(inputUsername, expectedUsername) || !safeEqual(inputPassword, String(env.ADMIN_PASSWORD))) {
+    return json({ ok: false, message: '账号或密码错误' }, 401);
   }
 
-  const token = await createToken(env);
+  const token = await createToken(env, expectedUsername);
   const url = new URL(request.url);
   const secure = url.protocol === 'https:' ? '; Secure' : '';
   return json({ ok: true }, 200, {

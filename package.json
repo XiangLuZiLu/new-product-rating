@@ -1,9 +1,10 @@
 {
   "name": "product-review-pages",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "private": true,
   "scripts": {
-    "dev": "wrangler pages dev public --compatibility-date=2026-06-24 --d1=DB",
+    "dev": "wrangler pages dev public --compatibility-date=2026-06-24",
+    "dev:d1": "wrangler pages dev public --compatibility-date=2026-06-24 --d1=DB",
     "deploy": "wrangler pages deploy public --project-name=product-review-pages"
   },
   "devDependencies": {

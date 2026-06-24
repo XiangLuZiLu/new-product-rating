@@ -1,0 +1,184 @@
+function normalizeAdminPath(value) {
+  let path = String(value || 'review-admin').trim();
+  if (!path) path = 'review-admin';
+  try {
+    if (/^https?:\/\//i.test(path)) path = new URL(path).pathname;
+  } catch {
+    path = 'review-admin';
+  }
+  path = path.replace(/^\/+/, '').replace(/\/+$/, '');
+  if (!path || path === 'api' || path.startsWith('api/')) path = 'review-admin';
+  return '/' + path;
+}
+
+function adminHtml(adminPath) {
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>新品评审评分系统后台</title>
+  <link rel="stylesheet" href="/assets/style.css" />
+</head>
+<body>
+  <div class="page-bg"></div>
+
+  <main class="container">
+    <section id="loginView" class="login-card card hidden">
+      <div class="brand">
+        <div class="brand-mark">评</div>
+        <div>
+          <h1>新品评审评分系统</h1>
+          <p>登录后录入、查询、编辑历史评审数据</p>
+        </div>
+      </div>
+      <form id="loginForm" class="login-form">
+        <label>
+          管理账号
+          <input type="text" name="username" placeholder="请输入后台管理账号" autocomplete="username" required />
+        </label>
+        <label>
+          管理密码
+          <input type="password" name="password" placeholder="请输入后台管理密码" autocomplete="current-password" required />
+        </label>
+        <button type="submit" class="primary full">登录后台</button>
+      </form>
+      <p class="tip">后台入口：<code>${adminPath}</code>。账号和密码由环境变量 <code>ADMIN_USERNAME</code>、<code>ADMIN_PASSWORD</code> 设置。</p>
+    </section>
+
+    <section id="appView" class="hidden">
+      <header class="topbar">
+        <div>
+          <h1>新品评审评分表</h1>
+          <p>50-40分大单，40-30分中单，30-20分小单试水，20分以下建议不下</p>
+        </div>
+        <div class="top-actions">
+          <button id="printBtn" class="ghost" type="button">打印</button>
+          <a id="exportBtn" class="ghost" href="/api/export">导出 CSV</a>
+          <button id="logoutBtn" class="danger-light" type="button">退出</button>
+        </div>
+      </header>
+
+      <div id="message" class="message hidden"></div>
+
+      <section class="stats-grid" id="statsGrid"></section>
+
+      <nav class="view-tabs no-print" aria-label="功能切换">
+        <button class="tab active" type="button" data-target="scoreSection">滑动评分</button>
+        <button class="tab" type="button" data-target="listSection">历史数据 / 后台编辑</button>
+      </nav>
+
+      <section id="scoreSection" class="card score-card">
+        <div class="section-title score-title">
+          <div>
+            <h2>手机滑动评分</h2>
+            <p class="tip">每个款式独立一页，手机可左右滑动切换，评分项可直接拖动滑块。</p>
+          </div>
+          <div class="admin-count no-print">
+            <label>
+              本次评分份数
+              <input id="pageCountInput" type="number" min="1" max="50" step="1" value="3" />
+            </label>
+            <button id="savePageCountBtn" class="primary" type="button">保存份数</button>
+          </div>
+        </div>
+
+        <div class="score-toolbar no-print">
+          <button id="prevSlideBtn" class="ghost" type="button">上一款</button>
+          <div class="slide-status">
+            <strong id="slideCounter">第 1 / 1 款</strong>
+            <span id="slideHint">左右滑动可切换款式</span>
+          </div>
+          <button id="nextSlideBtn" class="ghost" type="button">下一款</button>
+        </div>
+
+        <div id="scoreCarousel" class="score-carousel" aria-live="polite"></div>
+        <div id="slideDots" class="slide-dots no-print"></div>
+
+        <div class="score-actions no-print">
+          <button id="saveCurrentBtn" class="primary" type="button">保存当前款</button>
+          <button id="saveAllBtn" class="primary-light" type="button">保存全部已填写款</button>
+          <button id="clearCurrentBtn" class="ghost" type="button">清空当前页</button>
+          <button id="newBatchBtn" class="ghost" type="button">重新开始本次评分</button>
+        </div>
+      </section>
+
+      <section id="listSection" class="card list-card hidden">
+        <div class="section-title search-title">
+          <h2>历史评审数据 / 后台管理编辑</h2>
+          <form id="searchForm" class="search-form">
+            <input name="search" placeholder="搜索款式、季节、评审人、备注" />
+            <input name="date_from" type="date" title="开始日期" />
+            <input name="date_to" type="date" title="结束日期" />
+            <button class="primary" type="submit">查询</button>
+            <button class="ghost" type="button" id="clearSearchBtn">重置</button>
+          </form>
+        </div>
+
+        <div class="mobile-help no-print">手机端列表可左右滑动查看完整字段。点“编辑”会载入到滑动评分第一页进行修改。</div>
+        <div class="table-wrap">
+          <table class="review-table">
+            <thead>
+              <tr>
+                <th>产品图</th>
+                <th>款式编码</th>
+                <th>季节</th>
+                <th>基本售价</th>
+                <th>外观</th>
+                <th>材质</th>
+                <th>工艺</th>
+                <th>容量</th>
+                <th>舒适</th>
+                <th>总分</th>
+                <th>等级</th>
+                <th>评审人</th>
+                <th>日期</th>
+                <th>备注</th>
+                <th class="no-print">操作</th>
+              </tr>
+            </thead>
+            <tbody id="itemsBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="historyPanel" class="card history-card hidden no-print">
+        <div class="section-title">
+          <h2>修改历史</h2>
+          <button id="closeHistoryBtn" class="ghost" type="button">关闭</button>
+        </div>
+        <div id="historyList" class="history-list"></div>
+      </section>
+    </section>
+  </main>
+
+  <script>window.__ADMIN_PATH__ = ${JSON.stringify(adminPath)};</script>
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>`;
+}
+
+function responseHtml(html, status = 200) {
+  return new Response(html, {
+    status,
+    headers: {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'no-store'
+    }
+  });
+}
+
+export async function onRequest(context) {
+  const { request, env } = context;
+  const url = new URL(request.url);
+  const adminPath = normalizeAdminPath(env.ADMIN_PATH || env.ADMIN_SUFFIX);
+
+  if (request.method === 'GET' || request.method === 'HEAD') {
+    const normalizedPath = url.pathname.replace(/\/+$/, '') || '/';
+    if (normalizedPath === adminPath) {
+      return responseHtml(adminHtml(adminPath));
+    }
+  }
+
+  return env.ASSETS.fetch(request);
+}

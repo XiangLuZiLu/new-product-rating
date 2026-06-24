@@ -8,132 +8,18 @@
 </head>
 <body>
   <div class="page-bg"></div>
-
   <main class="container">
-    <section id="loginView" class="login-card card hidden">
+    <section class="login-card card public-card">
       <div class="brand">
         <div class="brand-mark">评</div>
         <div>
           <h1>新品评审评分系统</h1>
-          <p>登录后录入、查询、编辑历史评审数据</p>
+          <p>系统已部署成功。</p>
         </div>
       </div>
-      <form id="loginForm" class="login-form">
-        <label>
-          管理密码
-          <input type="password" name="password" placeholder="请输入后台管理密码" autocomplete="current-password" required />
-        </label>
-        <button type="submit" class="primary full">登录后台</button>
-      </form>
-      <p class="tip">首次部署请在 Cloudflare Pages 环境变量中设置 <code>ADMIN_PASSWORD</code>。</p>
-    </section>
-
-    <section id="appView" class="hidden">
-      <header class="topbar">
-        <div>
-          <h1>新品评审评分表</h1>
-          <p>50-40分大单，40-30分中单，30-20分小单试水，20分以下建议不下</p>
-        </div>
-        <div class="top-actions">
-          <button id="printBtn" class="ghost" type="button">打印</button>
-          <a id="exportBtn" class="ghost" href="/api/export">导出 CSV</a>
-          <button id="logoutBtn" class="danger-light" type="button">退出</button>
-        </div>
-      </header>
-
-      <div id="message" class="message hidden"></div>
-
-      <section class="stats-grid" id="statsGrid"></section>
-
-      <nav class="view-tabs no-print" aria-label="功能切换">
-        <button class="tab active" type="button" data-target="scoreSection">滑动评分</button>
-        <button class="tab" type="button" data-target="listSection">历史数据 / 后台编辑</button>
-      </nav>
-
-      <section id="scoreSection" class="card score-card">
-        <div class="section-title score-title">
-          <div>
-            <h2>手机滑动评分</h2>
-            <p class="tip">每个款式独立一页，手机可左右滑动切换，评分项可直接拖动滑块。</p>
-          </div>
-          <div class="admin-count no-print">
-            <label>
-              本次评分份数
-              <input id="pageCountInput" type="number" min="1" max="50" step="1" value="3" />
-            </label>
-            <button id="savePageCountBtn" class="primary" type="button">保存份数</button>
-          </div>
-        </div>
-
-        <div class="score-toolbar no-print">
-          <button id="prevSlideBtn" class="ghost" type="button">上一款</button>
-          <div class="slide-status">
-            <strong id="slideCounter">第 1 / 1 款</strong>
-            <span id="slideHint">左右滑动可切换款式</span>
-          </div>
-          <button id="nextSlideBtn" class="ghost" type="button">下一款</button>
-        </div>
-
-        <div id="scoreCarousel" class="score-carousel" aria-live="polite"></div>
-        <div id="slideDots" class="slide-dots no-print"></div>
-
-        <div class="score-actions no-print">
-          <button id="saveCurrentBtn" class="primary" type="button">保存当前款</button>
-          <button id="saveAllBtn" class="primary-light" type="button">保存全部已填写款</button>
-          <button id="clearCurrentBtn" class="ghost" type="button">清空当前页</button>
-          <button id="newBatchBtn" class="ghost" type="button">重新开始本次评分</button>
-        </div>
-      </section>
-
-      <section id="listSection" class="card list-card hidden">
-        <div class="section-title search-title">
-          <h2>历史评审数据 / 后台管理编辑</h2>
-          <form id="searchForm" class="search-form">
-            <input name="search" placeholder="搜索款式、季节、评审人、备注" />
-            <input name="date_from" type="date" title="开始日期" />
-            <input name="date_to" type="date" title="结束日期" />
-            <button class="primary" type="submit">查询</button>
-            <button class="ghost" type="button" id="clearSearchBtn">重置</button>
-          </form>
-        </div>
-
-        <div class="mobile-help no-print">手机端列表可左右滑动查看完整字段。点“编辑”会载入到滑动评分第一页进行修改。</div>
-        <div class="table-wrap">
-          <table class="review-table">
-            <thead>
-              <tr>
-                <th>产品图</th>
-                <th>款式编码</th>
-                <th>季节</th>
-                <th>基本售价</th>
-                <th>外观</th>
-                <th>材质</th>
-                <th>工艺</th>
-                <th>容量</th>
-                <th>舒适</th>
-                <th>总分</th>
-                <th>等级</th>
-                <th>评审人</th>
-                <th>日期</th>
-                <th>备注</th>
-                <th class="no-print">操作</th>
-              </tr>
-            </thead>
-            <tbody id="itemsBody"></tbody>
-          </table>
-        </div>
-      </section>
-
-      <section id="historyPanel" class="card history-card hidden no-print">
-        <div class="section-title">
-          <h2>修改历史</h2>
-          <button id="closeHistoryBtn" class="ghost" type="button">关闭</button>
-        </div>
-        <div id="historyList" class="history-list"></div>
-      </section>
+      <p class="tip">后台入口已隐藏，请通过配置的访问后缀打开，例如：<code>域名/你的后缀</code>。</p>
+      <p class="tip">页面不会提供后台按钮，避免普通用户误入后台。</p>
     </section>
   </main>
-
-  <script src="/assets/app.js" defer></script>
 </body>
 </html>

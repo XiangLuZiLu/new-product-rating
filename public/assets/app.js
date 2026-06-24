@@ -58,7 +58,7 @@ function emptyDraft() {
 
 function itemToDraft(item) {
   return {
-    id: item.id || null,
+    id: item.id ?? null,
     product_image: item.product_image || '',
     style_code: item.style_code || '',
     season: item.season || '',
@@ -295,7 +295,7 @@ function normalizeDraftForSave(draft) {
 async function saveDraft(index, silent = false) {
   const draft = drafts[index];
   const data = normalizeDraftForSave(draft);
-  const path = draft.id ? `/api/items/${draft.id}` : '/api/items';
+  const path = draft.id ? `/api/items/${encodeURIComponent(draft.id)}` : '/api/items';
   const method = draft.id ? 'PUT' : 'POST';
   const result = await requestJson(path, {
     method,
@@ -398,9 +398,9 @@ function renderTable() {
         <td class="remark-cell" title="${escapeHtml(item.remark)}">${escapeHtml(item.remark)}</td>
         <td class="no-print">
           <div class="actions">
-            <button class="ghost" data-action="edit" data-id="${item.id}">编辑</button>
-            <button class="ghost" data-action="history" data-id="${item.id}">历史</button>
-            <button class="danger-light" data-action="delete" data-id="${item.id}">删除</button>
+            <button class="ghost" data-action="edit" data-id="${escapeHtml(item.id)}">编辑</button>
+            <button class="ghost" data-action="history" data-id="${escapeHtml(item.id)}">历史</button>
+            <button class="danger-light" data-action="delete" data-id="${escapeHtml(item.id)}">删除</button>
           </div>
         </td>
       </tr>
@@ -428,12 +428,13 @@ async function checkLogin() {
 
 loginForm.addEventListener('submit', async (event) => {
   event.preventDefault();
+  const username = loginForm.elements.username.value.trim();
   const password = loginForm.elements.password.value;
   try {
     await requestJson('/api/login', {
       method: 'POST',
       headers: { 'content-type': 'application/json; charset=utf-8' },
-      body: JSON.stringify({ password })
+      body: JSON.stringify({ username, password })
     });
     loginForm.reset();
     showApp();
@@ -550,9 +551,9 @@ searchForm.addEventListener('submit', async (event) => {
 itemsBody.addEventListener('click', async (event) => {
   const btn = event.target.closest('button[data-action]');
   if (!btn) return;
-  const id = Number(btn.dataset.id);
+  const id = String(btn.dataset.id || '');
   const action = btn.dataset.action;
-  const item = items.find(row => Number(row.id) === id);
+  const item = items.find(row => String(row.id) === id);
 
   if (action === 'edit' && item) {
     if (drafts.some(draftHasContent) && !confirm('载入历史记录会覆盖当前滑动评分草稿，确定继续吗？')) return;
@@ -569,7 +570,7 @@ itemsBody.addEventListener('click', async (event) => {
   if (action === 'delete') {
     if (!confirm('确定删除这条评审记录吗？删除后普通列表不再显示，但修改历史中仍会保留快照。')) return;
     try {
-      await requestJson(`/api/items/${id}`, { method: 'DELETE' });
+      await requestJson(`/api/items/${encodeURIComponent(id)}`, { method: 'DELETE' });
       showMessage('记录已删除');
       await loadItems();
     } catch (e) {
@@ -580,7 +581,7 @@ itemsBody.addEventListener('click', async (event) => {
 
   if (action === 'history') {
     try {
-      const data = await requestJson(`/api/items/${id}/history`);
+      const data = await requestJson(`/api/items/${encodeURIComponent(id)}/history`);
       renderHistory(data.history || []);
       historyPanel.classList.remove('hidden');
       historyPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });

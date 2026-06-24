@@ -537,3 +537,5 @@ button, a.ghost {
   .review-table th,
   .review-table td { border-color: #000; font-size: 11px; padding: 5px; }
 }
+
+.public-card .tip + .tip { margin-top: 10px; }
