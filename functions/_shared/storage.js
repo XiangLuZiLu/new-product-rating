@@ -1,14 +1,14 @@
 export const DEFAULT_SCORE_TYPES = [
-  { id: 'main', label: '综合评分', include_total: true },
-  { id: 'independent', label: '独立评分', include_total: false }
+  { id: 'main', label: '综合评分' },
+  { id: 'independent', label: '独立评分' }
 ];
 
 export const DEFAULT_SCORE_FIELDS = [
-  { id: 'appearance', key: 'appearance_score', label: '外观设计', max_score: 10, score_type: 'main', score_type_label: '综合评分', score_type_include_total: true },
-  { id: 'material', key: 'material_score', label: '材质触感', max_score: 10, score_type: 'main', score_type_label: '综合评分', score_type_include_total: true },
-  { id: 'craftsmanship', key: 'craftsmanship_score', label: '工艺细节', max_score: 10, score_type: 'main', score_type_label: '综合评分', score_type_include_total: true },
-  { id: 'capacity', key: 'capacity_score', label: '容量收纳', max_score: 10, score_type: 'main', score_type_label: '综合评分', score_type_include_total: true },
-  { id: 'comfort', key: 'comfort_score', label: '背负舒适度', max_score: 10, score_type: 'main', score_type_label: '综合评分', score_type_include_total: true }
+  { id: 'appearance', key: 'appearance_score', label: '外观设计', max_score: 10, score_type: 'main', score_type_label: '综合评分' },
+  { id: 'material', key: 'material_score', label: '材质触感', max_score: 10, score_type: 'main', score_type_label: '综合评分' },
+  { id: 'craftsmanship', key: 'craftsmanship_score', label: '工艺细节', max_score: 10, score_type: 'main', score_type_label: '综合评分' },
+  { id: 'capacity', key: 'capacity_score', label: '容量收纳', max_score: 10, score_type: 'main', score_type_label: '综合评分' },
+  { id: 'comfort', key: 'comfort_score', label: '背负舒适度', max_score: 10, score_type: 'main', score_type_label: '综合评分' }
 ];
 
 
@@ -151,8 +151,7 @@ export function normalizeScoreTypes(value) {
     const base = id;
     while (used.has(id)) id = `${base}_${suffix++}`;
     used.add(id);
-    const include_total = normalizeBoolSetting(item.include_total ?? item.includeTotal ?? item.counts_in_total ?? item.countsInTotal, id !== 'independent');
-    types.push({ id, label, include_total });
+    types.push({ id, label });
     if (types.length >= 20) break;
   }
   return types.length ? types : DEFAULT_SCORE_TYPES.map(item => ({ ...item }));
@@ -166,15 +165,12 @@ function scoreTypeMeta(typeId, scoreTypes = DEFAULT_SCORE_TYPES, fallback = {}) 
   return {
     id,
     label: String(fallback.score_type_label || fallback.type_label || fallback.label || id || '综合评分'),
-    include_total: normalizeBoolSetting(fallback.score_type_include_total ?? fallback.include_total ?? fallback.includeTotal, id !== 'independent')
   };
 }
 
 function isMainScoreField(field) {
-  if (field && (Object.prototype.hasOwnProperty.call(field, 'score_type_include_total') || Object.prototype.hasOwnProperty.call(field, 'include_total') || Object.prototype.hasOwnProperty.call(field, 'includeTotal'))) {
-    return normalizeBoolSetting(field.score_type_include_total ?? field.include_total ?? field.includeTotal, true);
-  }
-  return normalizeScoreType(field?.score_type ?? field?.type ?? field?.group ?? field?.category) !== 'independent';
+  // 保留旧函数名兼容旧数据；新版中所有评分类型都是独立评分体系，不再通过该函数区分是否计入总分。
+  return true;
 }
 
 function toScore(value, label, maxScore = 10) {
@@ -244,12 +240,11 @@ export function normalizeScoreFields(value, scoreTypes = DEFAULT_SCORE_TYPES) {
     const max_score = normalizeMaxScore(item.max_score ?? item.maxScore ?? item.max ?? item.score_max ?? 10);
     const score_type = normalizeScoreType(item.score_type ?? item.type ?? item.group ?? item.category);
     const meta = scoreTypeMeta(score_type, scoreTypes, item);
-    const include_total = normalizeBoolSetting(item.score_type_include_total ?? item.include_total ?? item.includeTotal, meta.include_total);
     const score_type_label = String(item.score_type_label || item.type_label || meta.label || score_type).trim() || score_type;
-    fields.push({ id, label, max_score, score_type, score_type_label, score_type_include_total: include_total });
+    fields.push({ id, label, max_score, score_type, score_type_label });
     if (fields.length >= 20) break;
   }
-  return fields.length ? fields : DEFAULT_SCORE_FIELDS.map(({ id, label, max_score, score_type, score_type_label, score_type_include_total }) => ({ id, label, max_score, score_type: score_type || 'main', score_type_label: score_type_label || '综合评分', score_type_include_total: score_type_include_total !== false }));
+  return fields.length ? fields : DEFAULT_SCORE_FIELDS.map(({ id, label, max_score, score_type, score_type_label }) => ({ id, label, max_score, score_type: score_type || 'main', score_type_label: score_type_label || '综合评分' }));
 }
 
 export function normalizeStylePayload(payload = {}) {
@@ -280,7 +275,7 @@ function fieldsFromPayloadOrDefault(payload, scoreFields) {
   const configured = normalizeScoreFields(scoreFields);
   if (configured.length) return configured;
   if (Array.isArray(payload.score_items) && payload.score_items.length) {
-    return normalizeScoreFields(payload.score_items.map(item => ({ id: item.id, label: item.label || item.name, max_score: item.max_score ?? item.maxScore ?? item.max, score_type: item.score_type ?? item.type ?? item.group ?? item.category, score_type_label: item.score_type_label ?? item.type_label, score_type_include_total: item.score_type_include_total ?? item.include_total })), scoreFields);
+    return normalizeScoreFields(payload.score_items.map(item => ({ id: item.id, label: item.label || item.name, max_score: item.max_score ?? item.maxScore ?? item.max, score_type: item.score_type ?? item.type ?? item.group ?? item.category, score_type_label: item.score_type_label ?? item.type_label })), scoreFields);
   }
   return configured;
 }
@@ -310,13 +305,10 @@ export function normalizeScorePayload(payload = {}, scoreFields = DEFAULT_SCORE_
     const max_score = normalizeMaxScore(field.max_score);
     const score_type = normalizeScoreType(field.score_type ?? source.score_type);
     const score_type_label = String(field.score_type_label || source.score_type_label || score_typeMeta(score_type).label || score_type);
-    const score_type_include_total = isMainScoreField(field);
     const score = toRequiredScore(getScoreValueFromPayload(payload, { ...field, score: source.score }), field.label, max_score);
-    if (score_type_include_total) {
-      total += score;
-      maxTotal += max_score;
-    }
-    return { id: field.id, label: field.label, score, max_score, score_type, score_type_label, score_type_include_total };
+    total += score;
+    maxTotal += max_score;
+    return { id: field.id, label: field.label, score, max_score, score_type, score_type_label };
   });
   data.score_items_json = JSON.stringify(data.score_items);
   data.total_score = total;
@@ -373,15 +365,14 @@ function parseScoreItems(row, fallbackFields = DEFAULT_SCORE_FIELDS) {
           score: Number(item.score || 0),
           max_score: normalizeMaxScore(item.max_score ?? item.maxScore ?? item.max ?? fallbackFields[index]?.max_score),
           score_type: normalizeScoreType(item.score_type ?? item.type ?? item.group ?? item.category ?? fallbackFields[index]?.score_type),
-          score_type_label: String(item.score_type_label || item.type_label || fallbackFields[index]?.score_type_label || scoreTypeMeta(item.score_type ?? fallbackFields[index]?.score_type).label),
-          score_type_include_total: normalizeBoolSetting(item.score_type_include_total ?? item.include_total ?? fallbackFields[index]?.score_type_include_total, scoreTypeMeta(item.score_type ?? fallbackFields[index]?.score_type).include_total)
+          score_type_label: String(item.score_type_label || item.type_label || fallbackFields[index]?.score_type_label || scoreTypeMeta(item.score_type ?? fallbackFields[index]?.score_type).label)
         }));
       }
     } catch {}
   }
   return normalizeScoreFields(fallbackFields).map(field => {
     const key = LEGACY_KEY_BY_ID[field.id] || field.key;
-    return { id: field.id, label: field.label, score: key ? Number(row[key] || 0) : 0, max_score: normalizeMaxScore(field.max_score), score_type: normalizeScoreType(field.score_type), score_type_label: field.score_type_label || scoreTypeMeta(field.score_type).label, score_type_include_total: isMainScoreField(field) }; 
+    return { id: field.id, label: field.label, score: key ? Number(row[key] || 0) : 0, max_score: normalizeMaxScore(field.max_score), score_type: normalizeScoreType(field.score_type), score_type_label: field.score_type_label || scoreTypeMeta(field.score_type).label }; 
   });
 }
 

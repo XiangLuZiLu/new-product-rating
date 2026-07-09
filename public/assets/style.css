@@ -1284,3 +1284,53 @@ button.disabled {
     width: 100%;
   }
 }
+
+/* 2026-06: 评分类型改为独立评分体系 */
+.score-type-editor-row.score-type-system-row {
+  grid-template-columns: 36px minmax(220px, 1fr) 110px auto;
+}
+.score-system-hint {
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1e3a8a;
+  font-size: 13px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+.score-system-panel {
+  margin-top: 14px;
+}
+.score-system-summary {
+  display: grid;
+  gap: 6px;
+  min-width: 170px;
+}
+.score-system-summary span {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+  border-bottom: 1px dashed #dbeafe;
+}
+.score-system-summary span:last-child { border-bottom: 0; }
+.score-system-summary em {
+  color: var(--primary);
+  font-style: normal;
+  font-weight: 900;
+}
+.system-total-cell {
+  min-width: 190px;
+  text-align: left;
+}
+@media (max-width: 900px) {
+  .score-type-editor-row.score-type-system-row { grid-template-columns: 36px minmax(0, 1fr); }
+  .score-system-hint { grid-column: 2; width: fit-content; }
+}

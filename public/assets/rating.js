@@ -1,4 +1,4 @@
-console.info("product-review rating version: 20260624-custom-score-types-v1");
+console.info("product-review rating version: 20260624-score-systems-v1");
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
@@ -20,15 +20,15 @@ const doneText = $('#doneText');
 const restartBtn = $('#restartBtn');
 
 const defaultScoreTypes = [
-  { id: 'main', label: '综合评分', include_total: true },
-  { id: 'independent', label: '独立评分', include_total: false }
+  { id: 'main', label: '综合评分' },
+  { id: 'independent', label: '独立评分' }
 ];
 const defaultScoreFields = [
-  { id: 'appearance', label: '外观设计', max_score: 10, score_type: 'main', score_type_label: '综合评分', score_type_include_total: true },
-  { id: 'material', label: '材质触感', max_score: 10, score_type: 'main', score_type_label: '综合评分', score_type_include_total: true },
-  { id: 'craftsmanship', label: '工艺细节', max_score: 10, score_type: 'main', score_type_label: '综合评分', score_type_include_total: true },
-  { id: 'capacity', label: '容量收纳', max_score: 10, score_type: 'main', score_type_label: '综合评分', score_type_include_total: true },
-  { id: 'comfort', label: '背负舒适度', max_score: 10, score_type: 'main', score_type_label: '综合评分', score_type_include_total: true }
+  { id: 'appearance', label: '外观设计', max_score: 10, score_type: 'main', score_type_label: '综合评分' },
+  { id: 'material', label: '材质触感', max_score: 10, score_type: 'main', score_type_label: '综合评分' },
+  { id: 'craftsmanship', label: '工艺细节', max_score: 10, score_type: 'main', score_type_label: '综合评分' },
+  { id: 'capacity', label: '容量收纳', max_score: 10, score_type: 'main', score_type_label: '综合评分' },
+  { id: 'comfort', label: '背负舒适度', max_score: 10, score_type: 'main', score_type_label: '综合评分' }
 ];
 
 let scoreTypes = defaultScoreTypes.map(item => ({ ...item }));
@@ -87,7 +87,7 @@ function normalizeScoreTypes(types) {
     const base = id;
     while (used.has(id)) id = `${base}_${suffix++}`;
     used.add(id);
-    return { id, label, include_total: normalizeBool(type.include_total ?? type.includeTotal ?? type.counts_in_total, id !== 'independent') };
+    return { id, label };
   }).filter(Boolean);
   return normalized.length ? normalized : defaultScoreTypes.map(item => ({ ...item }));
 }
@@ -97,19 +97,23 @@ function scoreTypeMeta(value, fallback = {}) {
   if (found) return found;
   return {
     id,
-    label: String(fallback.score_type_label || fallback.type_label || id || '综合评分'),
-    include_total: normalizeBool(fallback.score_type_include_total ?? fallback.include_total ?? fallback.includeTotal, id !== 'independent')
+    label: String(fallback.score_type_label || fallback.type_label || id || '综合评分')
   };
 }
 function isMainScoreField(field) {
-  if (field && (Object.prototype.hasOwnProperty.call(field, 'score_type_include_total') || Object.prototype.hasOwnProperty.call(field, 'include_total') || Object.prototype.hasOwnProperty.call(field, 'includeTotal'))) {
-    return normalizeBool(field.score_type_include_total ?? field.include_total ?? field.includeTotal, true);
-  }
-  return scoreTypeMeta(field?.score_type ?? field?.type ?? field?.group ?? field?.category, field).include_total;
+  // 兼容旧函数名；新版所有评分类型都作为独立评分体系累计。
+  return true;
 }
 function scoreTypeLabel(value, field = {}) { return scoreTypeMeta(value, field).label; }
-function getMainScoreFields() {
-  return scoreFields.filter(isMainScoreField);
+function getScoreFieldGroups() {
+  const groups = new Map();
+  for (const type of normalizeScoreTypes(scoreTypes)) groups.set(type.id, { ...type, fields: [] });
+  for (const field of scoreFields) {
+    const meta = scoreTypeMeta(field.score_type, field);
+    if (!groups.has(meta.id)) groups.set(meta.id, { ...meta, fields: [] });
+    groups.get(meta.id).fields.push(field);
+  }
+  return Array.from(groups.values()).filter(group => group.fields.length);
 }
 function sumMaxScore(fields) {
   return fields.reduce((sum, field) => sum + normalizeMaxScore(field.max_score), 0);
@@ -126,8 +130,7 @@ function normalizeScoreFields(fields) {
       label: String(field.label || '').trim(),
       max_score: normalizeMaxScore(field.max_score ?? field.maxScore ?? field.max ?? field.score_max ?? 10),
       score_type: typeId,
-      score_type_label: String(field.score_type_label || field.type_label || meta.label || typeId),
-      score_type_include_total: normalizeBool(field.score_type_include_total ?? field.include_total ?? field.includeTotal, meta.include_total)
+      score_type_label: String(field.score_type_label || field.type_label || meta.label || typeId)
     };
   }).filter(field => field.label);
   return normalized.length ? normalized : defaultScoreFields.map(item => ({ ...item }));
@@ -152,8 +155,7 @@ function gradeByScore(total, maxTotal = 50) {
 }
 
 function makeDraft(style) {
-  const mainFields = scoreFields.filter(isMainScoreField);
-  const maxTotal = sumMaxScore(mainFields);
+  const maxTotal = sumMaxScore(scoreFields);
   return {
     style_id: style.id,
     reviewer,
@@ -169,7 +171,8 @@ function makeDraft(style) {
     touched_scores: Object.fromEntries(scoreFields.map(field => [field.id, false])),
     total_score: 0,
     max_total_score: maxTotal,
-    grade: gradeByScore(0, maxTotal)
+    grade: gradeByScore(0, maxTotal),
+    score_systems: []
   };
 }
 
@@ -178,18 +181,23 @@ function calculate(index) {
   if (!draft) return;
   let total = 0;
   let maxTotal = 0;
+  const groups = new Map();
   for (const field of scoreFields) {
     const max = normalizeMaxScore(field.max_score);
     const value = Math.min(max, Math.max(0, Number.parseInt(draft.scores?.[field.id], 10) || 0));
     draft.scores[field.id] = value;
-    if (isMainScoreField(field)) {
-      total += value;
-      maxTotal += max;
-    }
+    const meta = scoreTypeMeta(field.score_type, field);
+    if (!groups.has(meta.id)) groups.set(meta.id, { id: meta.id, label: meta.label, total: 0, max: 0 });
+    const group = groups.get(meta.id);
+    group.total += value;
+    group.max += max;
+    total += value;
+    maxTotal += max;
   }
   draft.total_score = total;
   draft.max_total_score = maxTotal;
   draft.grade = gradeByScore(total, maxTotal);
+  draft.score_systems = Array.from(groups.values()).map(group => ({ ...group, grade: gradeByScore(group.total, group.max) }));
 }
 
 function missingFields(draft) {
@@ -242,19 +250,24 @@ function renderScoreRows(fields, draft) {
 }
 
 
-function renderNonTotalScorePanels(draft) {
-  const groups = new Map();
-  scoreFields.filter(field => !isMainScoreField(field)).forEach(field => {
-    const meta = scoreTypeMeta(field.score_type, field);
-    if (!groups.has(meta.id)) groups.set(meta.id, { ...meta, fields: [] });
-    groups.get(meta.id).fields.push(field);
-  });
-  return Array.from(groups.values()).map(group => `
-    <fieldset class="mobile-score-panel independent-score-panel">
-      <legend>${escapeHtml(group.label)}，不计入综合总分 <span class="required">*</span></legend>
-      ${renderScoreRows(group.fields, draft)}
-    </fieldset>
-  `).join('');
+function renderScorePanels(draft) {
+  calculate(drafts.indexOf(draft));
+  const groups = getScoreFieldGroups();
+  if (!groups.length) return '<p class="tip">暂无评分项。</p>';
+  return groups.map(group => {
+    const summary = (draft.score_systems || []).find(item => item.id === group.id) || { total: 0, max: sumMaxScore(group.fields), grade: gradeByScore(0, sumMaxScore(group.fields)) };
+    return `
+      <fieldset class="mobile-score-panel score-system-panel" data-score-system="${escapeHtml(group.id)}">
+        <legend>${escapeHtml(group.label)} <span class="required">*</span></legend>
+        ${renderScoreRows(group.fields, draft)}
+        <div class="total-box score-system-total-box">
+          <span>${escapeHtml(group.label)}得分</span>
+          <strong data-system-total="${escapeHtml(group.id)}">${summary.total} / ${summary.max}</strong>
+          <em data-system-grade="${escapeHtml(group.id)}">${summary.grade}</em>
+        </div>
+      </fieldset>
+    `;
+  }).join('');
 }
 
 function renderSlides() {
@@ -294,22 +307,12 @@ function renderSlides() {
             </div>
           </div>
 
-          <fieldset class="mobile-score-panel">
-            <legend>综合评分，计入总分 <span class="required">*</span></legend>
-            ${renderScoreRows(scoreFields.filter(isMainScoreField), draft) || '<p class="tip">暂无综合评分项。</p>'}
-            <div class="total-box">
-              <span>综合总分</span>
-              <strong data-role="total">${draft.total_score} / ${draft.max_total_score}</strong>
-              <em data-role="grade">${draft.grade}</em>
-            </div>
-          </fieldset>
+          ${renderScorePanels(draft)}
 
           <label class="wide public-remark">
             备注
             <textarea data-field="remark" rows="3" placeholder="可填写对当前款的补充意见" ${draft.submitted ? 'disabled' : ''}>${escapeHtml(draft.remark)}</textarea>
           </label>
-
-          ${renderNonTotalScorePanels(draft)}
         </div>
       </article>
     `;
@@ -330,8 +333,12 @@ function updateSlideTotal(index) {
   calculate(index);
   const slide = scoreCarousel.querySelector(`.score-slide[data-index="${index}"]`);
   if (!slide) return;
-  slide.querySelector('[data-role="total"]').textContent = `${drafts[index].total_score} / ${drafts[index].max_total_score}`;
-  slide.querySelector('[data-role="grade"]').textContent = drafts[index].grade;
+  for (const group of drafts[index].score_systems || []) {
+    const totalEl = Array.from(slide.querySelectorAll('[data-system-total]')).find(el => el.dataset.systemTotal === group.id);
+    const gradeEl = Array.from(slide.querySelectorAll('[data-system-grade]')).find(el => el.dataset.systemGrade === group.id);
+    if (totalEl) totalEl.textContent = `${group.total} / ${group.max}`;
+    if (gradeEl) gradeEl.textContent = group.grade;
+  }
 }
 
 function updateStatus() {
@@ -433,7 +440,6 @@ async function submitCurrentAndNext() {
           max_score: normalizeMaxScore(field.max_score),
           score_type: normalizeScoreType(field.score_type),
           score_type_label: scoreTypeLabel(field.score_type, field),
-          score_type_include_total: isMainScoreField(field),
           score: Number(item.scores[field.id] || 0)
         }))
       }))
