@@ -1,4 +1,4 @@
-console.info("product-review admin version: 20260624-editable-snapshot-fieldtypes-v1");
+console.info("product-review admin version: 20260624-custom-score-types-v1");
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
@@ -24,6 +24,8 @@ const cancelScoreEditBtn = $('#cancelScoreEditBtn');
 const scoreFieldList = $('#scoreFieldList');
 const addScoreFieldBtn = $('#addScoreFieldBtn');
 const saveScoreFieldsBtn = $('#saveScoreFieldsBtn');
+const scoreTypeList = $('#scoreTypeList');
+const addScoreTypeBtn = $('#addScoreTypeBtn');
 const imageStorageForm = $('#imageStorageForm');
 const saveImageSettingsBtn = $('#saveImageSettingsBtn');
 const styleDropZone = $('#styleDropZone');
@@ -35,6 +37,7 @@ let scores = [];
 let scoreGroups = [];
 let selectedScoreGroupKey = null;
 let scoreFields = [];
+let scoreTypes = [];
 let editingStyleId = null;
 let inlineEditingStyleId = null;
 let editingScoreId = null;
@@ -72,12 +75,16 @@ document.addEventListener('click', (event) => {
   instantButtonFeedback(control);
 }, { passive: true });
 
+const defaultScoreTypes = [
+  { id: 'main', label: '综合评分', include_total: true },
+  { id: 'independent', label: '独立评分', include_total: false }
+];
 const defaultScoreFields = [
-  { id: 'appearance', label: '外观设计', max_score: 10, score_type: 'main' },
-  { id: 'material', label: '材质触感', max_score: 10, score_type: 'main' },
-  { id: 'craftsmanship', label: '工艺细节', max_score: 10, score_type: 'main' },
-  { id: 'capacity', label: '容量收纳', max_score: 10, score_type: 'main' },
-  { id: 'comfort', label: '背负舒适度', max_score: 10, score_type: 'main' }
+  { id: 'appearance', label: '外观设计', max_score: 10, score_type: 'main', score_type_label: '综合评分', score_type_include_total: true },
+  { id: 'material', label: '材质触感', max_score: 10, score_type: 'main', score_type_label: '综合评分', score_type_include_total: true },
+  { id: 'craftsmanship', label: '工艺细节', max_score: 10, score_type: 'main', score_type_label: '综合评分', score_type_include_total: true },
+  { id: 'capacity', label: '容量收纳', max_score: 10, score_type: 'main', score_type_label: '综合评分', score_type_include_total: true },
+  { id: 'comfort', label: '背负舒适度', max_score: 10, score_type: 'main', score_type_label: '综合评分', score_type_include_total: true }
 ];
 
 function today() { return new Date().toISOString().slice(0, 10); }
@@ -95,16 +102,55 @@ function normalizeMaxScore(value) {
   return Math.max(1, Math.min(100, n));
 }
 
-function normalizeScoreType(value) {
-  const raw = String(value ?? '').trim().toLowerCase();
-  if (['independent', 'standalone', 'single', 'extra', 'separate', '独立', '独立评分'].includes(raw)) return 'independent';
-  return 'main';
+function makeScoreTypeId(value, index = 0) {
+  const raw = String(value || '').trim();
+  const lowered = raw.toLowerCase();
+  if (['main', 'general', 'total', '综合', '综合评分', '计入总分'].includes(lowered)) return 'main';
+  if (['independent', 'standalone', 'single', 'extra', 'separate', '独立', '独立评分', '不计入总分'].includes(lowered)) return 'independent';
+  return raw.replace(/[^a-zA-Z0-9_\u4e00-\u9fa5-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 48) || `type_${index + 1}`;
+}
+function normalizeScoreType(value) { return makeScoreTypeId(value, 0); }
+function normalizeBool(value, fallback = true) {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value === 'boolean') return value;
+  const text = String(value).trim().toLowerCase();
+  if (['true', '1', 'yes', 'on', '计入', '计入总分'].includes(text)) return true;
+  if (['false', '0', 'no', 'off', '不计入', '不计入总分'].includes(text)) return false;
+  return fallback;
+}
+function normalizeScoreTypesLocal(types) {
+  const list = Array.isArray(types) ? types : defaultScoreTypes;
+  const used = new Set();
+  const normalized = list.map((type, index) => {
+    const label = String(type?.label || type?.name || '').trim();
+    if (!label) return null;
+    let id = makeScoreTypeId(type.id || type.key || label, index);
+    let suffix = 2;
+    const base = id;
+    while (used.has(id)) id = `${base}_${suffix++}`;
+    used.add(id);
+    return { id, label, include_total: normalizeBool(type.include_total ?? type.includeTotal ?? type.counts_in_total, id !== 'independent') };
+  }).filter(Boolean);
+  return normalized.length ? normalized : defaultScoreTypes.map(item => ({ ...item }));
+}
+function scoreTypeMeta(value, fallback = {}) {
+  const id = normalizeScoreType(value || fallback.score_type || fallback.type || 'main');
+  const found = normalizeScoreTypesLocal(scoreTypes).find(item => item.id === id);
+  if (found) return found;
+  return {
+    id,
+    label: String(fallback.score_type_label || fallback.type_label || id || '综合评分'),
+    include_total: normalizeBool(fallback.score_type_include_total ?? fallback.include_total ?? fallback.includeTotal, id !== 'independent')
+  };
 }
 function isMainScoreField(field) {
-  return normalizeScoreType(field?.score_type ?? field?.type ?? field?.group ?? field?.category) !== 'independent';
+  if (field && (Object.prototype.hasOwnProperty.call(field, 'score_type_include_total') || Object.prototype.hasOwnProperty.call(field, 'include_total') || Object.prototype.hasOwnProperty.call(field, 'includeTotal'))) {
+    return normalizeBool(field.score_type_include_total ?? field.include_total ?? field.includeTotal, true);
+  }
+  return scoreTypeMeta(field?.score_type ?? field?.type ?? field?.group ?? field?.category, field).include_total;
 }
-function scoreTypeLabel(value) {
-  return isMainScoreField({ score_type: value }) ? '综合评分' : '独立评分';
+function scoreTypeLabel(value, field = {}) {
+  return scoreTypeMeta(value, field).label;
 }
 function gradeByScore(total, maxTotal = 50) {
   const max = Number(maxTotal);
@@ -128,6 +174,7 @@ function showMessage(text, type = 'success') {
 }
 function normalizeScoreFieldsLocal(fields) {
   if (!Array.isArray(fields)) return defaultScoreFields.map(item => ({ ...item }));
+  scoreTypes = normalizeScoreTypesLocal(scoreTypes);
   const used = new Set();
   const normalized = fields.map((field, index) => {
     const label = String(field.label || '').trim();
@@ -137,7 +184,17 @@ function normalizeScoreFieldsLocal(fields) {
     const base = id;
     while (used.has(id)) id = `${base}_${suffix++}`;
     used.add(id);
-    return { id, label, max_score: normalizeMaxScore(field.max_score ?? field.maxScore ?? field.max ?? field.score_max ?? 10), score_type: normalizeScoreType(field.score_type ?? field.type ?? field.group ?? field.category) };
+    const typeId = normalizeScoreType(field.score_type ?? field.type ?? field.group ?? field.category);
+    const meta = scoreTypeMeta(typeId, field);
+    const include_total = normalizeBool(field.score_type_include_total ?? field.include_total ?? field.includeTotal, meta.include_total);
+    return {
+      id,
+      label,
+      max_score: normalizeMaxScore(field.max_score ?? field.maxScore ?? field.max ?? field.score_max ?? 10),
+      score_type: typeId,
+      score_type_label: String(field.score_type_label || field.type_label || meta.label || typeId),
+      score_type_include_total: include_total
+    };
   }).filter(Boolean);
   return normalized.length ? normalized : defaultScoreFields.map(item => ({ ...item }));
 }
@@ -228,20 +285,35 @@ function renderStats() {
     <div class="stat-card"><span>平均分</span><strong>${avg}</strong></div>
   `;
 }
-function renderScoreFieldEditor() {
-  scoreFields = normalizeScoreFieldsLocal(scoreFields);
-  scoreFieldList.innerHTML = scoreFields.map((field, index) => `
-    <div class="score-field-editor-row" data-index="${index}" data-id="${escapeHtml(field.id)}">
-      <span class="score-field-order">${index + 1}</span>
-      <input data-score-field-label value="${escapeHtml(field.label)}" placeholder="评分项名称" />
-      <label class="score-type-editor"><span>类型</span><select data-score-field-type>
-        <option value="main" ${isMainScoreField(field) ? 'selected' : ''}>综合评分</option>
-        <option value="independent" ${!isMainScoreField(field) ? 'selected' : ''}>独立评分</option>
-      </select></label>
-      <label class="score-max-editor"><span>满分</span><input data-score-field-max type="number" min="1" max="100" step="1" value="${normalizeMaxScore(field.max_score)}" /></label>
-      <button class="danger-light" type="button" data-score-field-action="delete">删除</button>
+function renderScoreTypeEditor() {
+  if (!scoreTypeList) return;
+  scoreTypes = normalizeScoreTypesLocal(scoreTypes);
+  scoreTypeList.innerHTML = scoreTypes.map((type, index) => `
+    <div class="score-type-editor-row" data-index="${index}" data-id="${escapeHtml(type.id)}">
+      <span class="score-field-order type-order">${index + 1}</span>
+      <input data-score-type-label value="${escapeHtml(type.label)}" placeholder="例如 设计师宣讲 / 价格竞争力" />
+      <label class="score-type-count"><input data-score-type-include type="checkbox" ${type.include_total ? 'checked' : ''} /> <span>计入综合总分</span></label>
+      <button class="danger-light" type="button" data-score-type-action="delete">删除</button>
     </div>
   `).join('');
+}
+
+function renderScoreFieldEditor() {
+  scoreTypes = normalizeScoreTypesLocal(scoreTypes);
+  scoreFields = normalizeScoreFieldsLocal(scoreFields);
+  const typeOptions = (selectedId) => scoreTypes.map(type => `<option value="${escapeHtml(type.id)}" ${type.id === selectedId ? 'selected' : ''}>${escapeHtml(type.label)}${type.include_total ? '｜计入总分' : '｜不计入总分'}</option>`).join('');
+  scoreFieldList.innerHTML = scoreFields.map((field, index) => {
+    const meta = scoreTypeMeta(field.score_type, field);
+    return `
+      <div class="score-field-editor-row" data-index="${index}" data-id="${escapeHtml(field.id)}">
+        <span class="score-field-order">${index + 1}</span>
+        <input data-score-field-label value="${escapeHtml(field.label)}" placeholder="评分项名称" />
+        <label class="score-type-editor"><span>类型</span><select class="pretty-select" data-score-field-type>${typeOptions(meta.id)}</select></label>
+        <label class="score-max-editor"><span>满分</span><input data-score-field-max type="number" min="1" max="100" step="1" value="${normalizeMaxScore(field.max_score)}" /></label>
+        <button class="danger-light" type="button" data-score-field-action="delete">删除</button>
+      </div>
+    `;
+  }).join('');
 }
 
 function normalizeImageSettingsLocal(settings = {}) {
@@ -296,20 +368,43 @@ function toggleImageSettingsFields() {
   if (s3Box) s3Box.classList.toggle('hidden', driver !== 's3');
 }
 
+function readScoreTypesFromEditor() {
+  if (!scoreTypeList) return normalizeScoreTypesLocal(scoreTypes);
+  const rows = Array.from(scoreTypeList.querySelectorAll('.score-type-editor-row'));
+  const types = rows.map((row, index) => {
+    const label = row.querySelector('[data-score-type-label]')?.value?.trim() || '';
+    const previousId = row.dataset.id || '';
+    return {
+      id: previousId || makeScoreTypeId(label, index),
+      label,
+      include_total: Boolean(row.querySelector('[data-score-type-include]')?.checked)
+    };
+  }).filter(type => type.label);
+  if (!types.length) throw new Error('至少保留 1 个评分类型');
+  return normalizeScoreTypesLocal(types);
+}
+
 function readScoreFieldsFromEditor() {
+  scoreTypes = readScoreTypesFromEditor();
   const rows = Array.from(scoreFieldList.querySelectorAll('.score-field-editor-row'));
-  const fields = rows.map((row, index) => ({
-    id: row.dataset.id || makeScoreFieldId(),
-    label: row.querySelector('[data-score-field-label]')?.value?.trim() || '',
-    max_score: normalizeMaxScore(row.querySelector('[data-score-field-max]')?.value),
-    score_type: normalizeScoreType(row.querySelector('[data-score-field-type]')?.value)
-  })).filter(field => field.label);
+  const fields = rows.map((row, index) => {
+    const typeId = normalizeScoreType(row.querySelector('[data-score-field-type]')?.value);
+    const meta = scoreTypeMeta(typeId);
+    return {
+      id: row.dataset.id || makeScoreFieldId(),
+      label: row.querySelector('[data-score-field-label]')?.value?.trim() || '',
+      max_score: normalizeMaxScore(row.querySelector('[data-score-field-max]')?.value),
+      score_type: typeId,
+      score_type_label: meta.label,
+      score_type_include_total: meta.include_total
+    };
+  }).filter(field => field.label);
   if (!fields.length) throw new Error('至少保留 1 个评分项');
   return normalizeScoreFieldsLocal(fields);
 }
 function getScoreItems(score) {
   if (Array.isArray(score?.score_items) && score.score_items.length) return score.score_items;
-  return scoreFields.map(field => ({ id: field.id, label: field.label, max_score: normalizeMaxScore(field.max_score), score_type: normalizeScoreType(field.score_type), score: Number(score?.[field.id] || 0) }));
+  return scoreFields.map(field => ({ id: field.id, label: field.label, max_score: normalizeMaxScore(field.max_score), score_type: normalizeScoreType(field.score_type), score_type_label: scoreTypeLabel(field.score_type, field), score_type_include_total: isMainScoreField(field), score: Number(score?.[field.id] || 0) }));
 }
 function getScoreSubmitTime(score) {
   return String(score?.submitted_at || score?.created_at || score?.review_date || '').trim();
@@ -343,11 +438,11 @@ function renderScoreGroupDetail(group) {
   const labelMap = new Map();
   for (const score of group.scores) {
     for (const item of getScoreItems(score)) {
-      if (!labelMap.has(item.label)) labelMap.set(item.label, { label: item.label, score_type: normalizeScoreType(item.score_type) });
+      if (!labelMap.has(item.label)) labelMap.set(item.label, { label: item.label, score_type: normalizeScoreType(item.score_type), score_type_label: scoreTypeLabel(item.score_type, item), score_type_include_total: isMainScoreField(item) });
     }
   }
-  if (!labelMap.size) scoreFields.forEach(item => labelMap.set(item.label, { label: item.label, score_type: normalizeScoreType(item.score_type) }));
-  const labels = Array.from(labelMap.values()).sort((a, b) => Number(!isMainScoreField(a)) - Number(!isMainScoreField(b)));
+  if (!labelMap.size) scoreFields.forEach(item => labelMap.set(item.label, { label: item.label, score_type: normalizeScoreType(item.score_type), score_type_label: scoreTypeLabel(item.score_type, item), score_type_include_total: isMainScoreField(item) }));
+  const labels = Array.from(labelMap.values()).sort((a, b) => Number(!isMainScoreField(a)) - Number(!isMainScoreField(b)) || String(scoreTypeLabel(a.score_type, a)).localeCompare(String(scoreTypeLabel(b.score_type, b))));
   return `
     <tr class="score-group-detail-row">
       <td colspan="3">
@@ -362,7 +457,7 @@ function renderScoreGroupDetail(group) {
             <table class="review-table detail-score-table">
               <thead><tr>
                 <th>产品图</th><th>款式编码</th><th>季节</th><th>基本售价</th>
-                ${labels.map(item => `<th>${escapeHtml(item.label)}<small class="score-type-mini">${scoreTypeLabel(item.score_type)}</small></th>`).join('')}
+                ${labels.map(item => `<th>${escapeHtml(item.label)}<small class="score-type-mini">${scoreTypeLabel(item.score_type, item)}</small></th>`).join('')}
                 <th>总分</th><th>等级</th><th>备注</th><th class="no-print">操作</th>
               </tr></thead>
               <tbody>
@@ -509,7 +604,9 @@ function renderScores() {
 }
 async function loadSettings() {
   const data = await requestJson('/api/settings');
+  scoreTypes = normalizeScoreTypesLocal(data.settings?.score_types || defaultScoreTypes);
   scoreFields = normalizeScoreFieldsLocal(data.settings?.score_fields || defaultScoreFields);
+  renderScoreTypeEditor();
   renderScoreFieldEditor();
   fillImageSettingsForm(data.settings?.image_settings || {});
 }
@@ -549,7 +646,7 @@ function fillStyleForm(style) {
 
 function fillScoreEditForm(score) {
   editingScoreId = score.id;
-  const items = getScoreItems(score).map(item => ({ id: item.id, label: item.label, max_score: normalizeMaxScore(item.max_score), score_type: normalizeScoreType(item.score_type), score: Number(item.score || 0) }));
+  const items = getScoreItems(score).map(item => ({ id: item.id, label: item.label, max_score: normalizeMaxScore(item.max_score), score_type: normalizeScoreType(item.score_type), score_type_label: scoreTypeLabel(item.score_type, item), score_type_include_total: isMainScoreField(item), score: Number(item.score || 0) }));
   editingScoreMeta = { style_id: score.style_id, reviewer: score.reviewer || '', review_date: score.review_date || today(), score_items: items };
   scoreEditPanel.classList.remove('hidden');
   scoreEditForm.elements.style_id.value = score.style_id || '';
@@ -559,8 +656,8 @@ function fillScoreEditForm(score) {
     <legend>评分项</legend>
     ${items.map(item => `
       <label class="score-row">
-        <span>${escapeHtml(item.label)}<small class="score-type-mini">${scoreTypeLabel(item.score_type)}</small></span>
-        <input data-score-item-id="${escapeHtml(item.id)}" data-score-item-label="${escapeHtml(item.label)}" data-score-item-max="${normalizeMaxScore(item.max_score)}" data-score-item-type="${normalizeScoreType(item.score_type)}" type="range" min="0" max="${normalizeMaxScore(item.max_score)}" step="1" value="${Number(item.score || 0)}" />
+        <span>${escapeHtml(item.label)}<small class="score-type-mini">${scoreTypeLabel(item.score_type, item)}</small></span>
+        <input data-score-item-id="${escapeHtml(item.id)}" data-score-item-label="${escapeHtml(item.label)}" data-score-item-max="${normalizeMaxScore(item.max_score)}" data-score-item-type="${normalizeScoreType(item.score_type)}" data-score-item-type-label="${escapeHtml(scoreTypeLabel(item.score_type, item))}" data-score-item-type-include="${isMainScoreField(item) ? '1' : '0'}" type="range" min="0" max="${normalizeMaxScore(item.max_score)}" step="1" value="${Number(item.score || 0)}" />
         <output>${Number(item.score || 0)} / ${normalizeMaxScore(item.max_score)}</output>
       </label>
     `).join('')}
@@ -572,7 +669,7 @@ function updateScoreEditTotal() {
   let total = 0;
   let maxTotal = 0;
   scoreEditForm.querySelectorAll('[data-score-item-id]').forEach(input => {
-    if (normalizeScoreType(input.dataset.scoreItemType) === 'independent') return;
+    if (input.dataset.scoreItemTypeInclude === '0') return;
     total += Number(input.value || 0);
     maxTotal += normalizeMaxScore(input.dataset.scoreItemMax || input.max);
   });
@@ -627,9 +724,37 @@ if (imageStorageForm) {
 }
 
 addScoreFieldBtn.addEventListener('click', () => {
-  scoreFields.push({ id: makeScoreFieldId(), label: `评分项${scoreFields.length + 1}`, max_score: 10 });
+  scoreFields.push({ id: makeScoreFieldId(), label: `评分项${scoreFields.length + 1}`, max_score: 10, score_type: normalizeScoreTypesLocal(scoreTypes)[0]?.id || 'main' });
   renderScoreFieldEditor();
 });
+
+if (addScoreTypeBtn) {
+  addScoreTypeBtn.addEventListener('click', () => {
+    scoreTypes = normalizeScoreTypesLocal(scoreTypes);
+    scoreTypes.push({ id: makeScoreTypeId(`评分类型${scoreTypes.length + 1}`, scoreTypes.length), label: `评分类型${scoreTypes.length + 1}`, include_total: false });
+    renderScoreTypeEditor();
+    renderScoreFieldEditor();
+  });
+}
+if (scoreTypeList) {
+  scoreTypeList.addEventListener('click', (event) => {
+    const btn = event.target.closest('[data-score-type-action="delete"]');
+    if (!btn) return;
+    const rows = Array.from(scoreTypeList.querySelectorAll('.score-type-editor-row'));
+    if (rows.length <= 1) { showMessage('至少保留 1 个评分类型', 'error'); return; }
+    const row = btn.closest('.score-type-editor-row');
+    const typeId = row?.dataset.id;
+    row?.remove();
+    scoreTypes = readScoreTypesFromEditor();
+    const fallbackType = scoreTypes[0]?.id || 'main';
+    scoreFields = scoreFields.map(field => normalizeScoreType(field.score_type) === typeId ? { ...field, score_type: fallbackType } : field);
+    renderScoreFieldEditor();
+  });
+  scoreTypeList.addEventListener('input', () => {
+    try { scoreTypes = readScoreTypesFromEditor(); renderScoreFieldEditor(); } catch {}
+  });
+}
+
 scoreFieldList.addEventListener('click', (event) => {
   const btn = event.target.closest('[data-score-field-action="delete"]');
   if (!btn) return;
@@ -642,14 +767,17 @@ saveScoreFieldsBtn.addEventListener('click', async () => {
   setButtonBusy(saveScoreFieldsBtn, true, '保存中...');
   try {
     const fields = readScoreFieldsFromEditor();
+    const types = normalizeScoreTypesLocal(scoreTypes);
     const data = await requestJson('/api/settings', {
       method: 'PUT',
       headers: { 'content-type': 'application/json; charset=utf-8' },
-      body: JSON.stringify({ score_fields: fields })
+      body: JSON.stringify({ score_types: types, score_fields: fields })
     });
+    scoreTypes = normalizeScoreTypesLocal(data.settings?.score_types || types);
     scoreFields = normalizeScoreFieldsLocal(data.settings?.score_fields || fields);
+    renderScoreTypeEditor();
     renderScoreFieldEditor();
-    showMessage('评分项已保存，前端评分页会按新配置显示');
+    showMessage('评分类型和评分项已保存，前端评分页会按新配置显示');
     await loadScores();
   } catch (e) { showMessage(e.message, 'error'); }
   finally { setButtonBusy(saveScoreFieldsBtn, false); }
@@ -865,6 +993,8 @@ scoreEditForm.addEventListener('submit', async (event) => {
       label: input.dataset.scoreItemLabel,
       max_score: normalizeMaxScore(input.dataset.scoreItemMax || input.max),
       score_type: normalizeScoreType(input.dataset.scoreItemType),
+      score_type_label: input.dataset.scoreItemTypeLabel || scoreTypeLabel(input.dataset.scoreItemType),
+      score_type_include_total: input.dataset.scoreItemTypeInclude !== '0',
       score: Number(input.value || 0)
     }));
     const payload = {

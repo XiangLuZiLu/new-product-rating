@@ -8,8 +8,9 @@ export async function onRequestGet({ env }) {
   try {
     const storage = getStorage(env);
     const styles = await storage.listStyles({ activeOnly: true });
+    const scoreTypes = storage.getScoreTypes ? await storage.getScoreTypes() : [];
     const scoreFields = await storage.getScoreFields();
-    return json({ ok: true, styles, score_fields: scoreFields });
+    return json({ ok: true, styles, score_types: scoreTypes, score_fields: scoreFields });
   } catch (e) {
     return json({ ok: false, message: e.message || '读取评分款式失败' }, e.status || 500);
   }

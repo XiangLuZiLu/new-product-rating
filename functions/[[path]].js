@@ -16,7 +16,7 @@ function adminHtml(adminPath, sessionIdleMinutes) {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>新品评审后台</title>
-  <link rel="stylesheet" href="/assets/style.css?v=20260624-editable-snapshot-fieldtypes-v1" />
+  <link rel="stylesheet" href="/assets/style.css?v=20260624-custom-score-types-v1" />
 </head>
 <body>
   <div class="page-bg"></div>
@@ -103,13 +103,17 @@ function adminHtml(adminPath, sessionIdleMinutes) {
           <div class="section-title">
             <div>
               <h2>评分项配置</h2>
-              <p class="tip">这里可以自定义前端要评分的项目、每项满分和统计类型；综合评分计入总分，独立评分单独展示不参与总分。</p>
+              <p class="tip">这里可以自定义评分类型和评分项；评分类型可自定义名称，并设置是否计入综合总分，后续可继续新增更多评分体系。</p>
             </div>
             <div class="form-actions">
+              <button id="addScoreTypeBtn" class="ghost" type="button">新增类型</button>
               <button id="addScoreFieldBtn" class="ghost" type="button">新增评分项</button>
-              <button id="saveScoreFieldsBtn" class="primary" type="button">保存评分项</button>
+              <button id="saveScoreFieldsBtn" class="primary" type="button">保存配置</button>
             </div>
           </div>
+          <div class="score-config-subtitle">评分类型</div>
+          <div id="scoreTypeList" class="score-type-list"></div>
+          <div class="score-config-subtitle">评分项</div>
           <div id="scoreFieldList" class="score-field-list"></div>
         </section>
       </section>
@@ -209,7 +213,7 @@ function adminHtml(adminPath, sessionIdleMinutes) {
     </section>
   </main>
   <script>window.__ADMIN_PATH__ = ${JSON.stringify(adminPath)}; window.__SESSION_IDLE_MINUTES__ = ${JSON.stringify(sessionIdleMinutes)};</script>
-  <script src="/assets/admin.js?v=20260624-editable-snapshot-fieldtypes-v1" defer></script>
+  <script src="/assets/admin.js?v=20260624-custom-score-types-v1" defer></script>
 </body>
 </html>`;
 }

@@ -1,4 +1,4 @@
-console.info("product-review rating version: 20260624-editable-snapshot-fieldtypes-v1");
+console.info("product-review rating version: 20260624-custom-score-types-v1");
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
@@ -19,14 +19,19 @@ const bottomNextBtn = $('#bottomNextBtn');
 const doneText = $('#doneText');
 const restartBtn = $('#restartBtn');
 
+const defaultScoreTypes = [
+  { id: 'main', label: '综合评分', include_total: true },
+  { id: 'independent', label: '独立评分', include_total: false }
+];
 const defaultScoreFields = [
-  { id: 'appearance', label: '外观设计', max_score: 10, score_type: 'main' },
-  { id: 'material', label: '材质触感', max_score: 10, score_type: 'main' },
-  { id: 'craftsmanship', label: '工艺细节', max_score: 10, score_type: 'main' },
-  { id: 'capacity', label: '容量收纳', max_score: 10, score_type: 'main' },
-  { id: 'comfort', label: '背负舒适度', max_score: 10, score_type: 'main' }
+  { id: 'appearance', label: '外观设计', max_score: 10, score_type: 'main', score_type_label: '综合评分', score_type_include_total: true },
+  { id: 'material', label: '材质触感', max_score: 10, score_type: 'main', score_type_label: '综合评分', score_type_include_total: true },
+  { id: 'craftsmanship', label: '工艺细节', max_score: 10, score_type: 'main', score_type_label: '综合评分', score_type_include_total: true },
+  { id: 'capacity', label: '容量收纳', max_score: 10, score_type: 'main', score_type_label: '综合评分', score_type_include_total: true },
+  { id: 'comfort', label: '背负舒适度', max_score: 10, score_type: 'main', score_type_label: '综合评分', score_type_include_total: true }
 ];
 
+let scoreTypes = defaultScoreTypes.map(item => ({ ...item }));
 let scoreFields = defaultScoreFields.map(item => ({ ...item }));
 let reviewer = '';
 let styles = [];
@@ -55,14 +60,54 @@ function normalizeMaxScore(value) {
   return Math.max(1, Math.min(100, n));
 }
 
-function normalizeScoreType(value) {
-  const raw = String(value ?? '').trim().toLowerCase();
-  if (['independent', 'standalone', 'single', 'extra', 'separate', '独立', '独立评分'].includes(raw)) return 'independent';
-  return 'main';
+function makeScoreTypeId(value, index = 0) {
+  const raw = String(value || '').trim();
+  const lowered = raw.toLowerCase();
+  if (['main', 'general', 'total', '综合', '综合评分', '计入总分'].includes(lowered)) return 'main';
+  if (['independent', 'standalone', 'single', 'extra', 'separate', '独立', '独立评分', '不计入总分'].includes(lowered)) return 'independent';
+  return raw.replace(/[^a-zA-Z0-9_\u4e00-\u9fa5-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 48) || `type_${index + 1}`;
+}
+function normalizeScoreType(value) { return makeScoreTypeId(value, 0); }
+function normalizeBool(value, fallback = true) {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value === 'boolean') return value;
+  const text = String(value).trim().toLowerCase();
+  if (['true', '1', 'yes', 'on', '计入', '计入总分'].includes(text)) return true;
+  if (['false', '0', 'no', 'off', '不计入', '不计入总分'].includes(text)) return false;
+  return fallback;
+}
+function normalizeScoreTypes(types) {
+  const list = Array.isArray(types) ? types : defaultScoreTypes;
+  const used = new Set();
+  const normalized = list.map((type, index) => {
+    const label = String(type?.label || type?.name || '').trim();
+    if (!label) return null;
+    let id = makeScoreTypeId(type.id || type.key || label, index);
+    let suffix = 2;
+    const base = id;
+    while (used.has(id)) id = `${base}_${suffix++}`;
+    used.add(id);
+    return { id, label, include_total: normalizeBool(type.include_total ?? type.includeTotal ?? type.counts_in_total, id !== 'independent') };
+  }).filter(Boolean);
+  return normalized.length ? normalized : defaultScoreTypes.map(item => ({ ...item }));
+}
+function scoreTypeMeta(value, fallback = {}) {
+  const id = normalizeScoreType(value || fallback.score_type || fallback.type || 'main');
+  const found = normalizeScoreTypes(scoreTypes).find(item => item.id === id);
+  if (found) return found;
+  return {
+    id,
+    label: String(fallback.score_type_label || fallback.type_label || id || '综合评分'),
+    include_total: normalizeBool(fallback.score_type_include_total ?? fallback.include_total ?? fallback.includeTotal, id !== 'independent')
+  };
 }
 function isMainScoreField(field) {
-  return normalizeScoreType(field?.score_type ?? field?.type ?? field?.group ?? field?.category) !== 'independent';
+  if (field && (Object.prototype.hasOwnProperty.call(field, 'score_type_include_total') || Object.prototype.hasOwnProperty.call(field, 'include_total') || Object.prototype.hasOwnProperty.call(field, 'includeTotal'))) {
+    return normalizeBool(field.score_type_include_total ?? field.include_total ?? field.includeTotal, true);
+  }
+  return scoreTypeMeta(field?.score_type ?? field?.type ?? field?.group ?? field?.category, field).include_total;
 }
+function scoreTypeLabel(value, field = {}) { return scoreTypeMeta(value, field).label; }
 function getMainScoreFields() {
   return scoreFields.filter(isMainScoreField);
 }
@@ -72,12 +117,19 @@ function sumMaxScore(fields) {
 
 function normalizeScoreFields(fields) {
   if (!Array.isArray(fields)) return defaultScoreFields.map(item => ({ ...item }));
-  const normalized = fields.map((field, index) => ({
-    id: String(field.id || `field_${index + 1}`).trim() || `field_${index + 1}`,
-    label: String(field.label || '').trim(),
-    max_score: normalizeMaxScore(field.max_score ?? field.maxScore ?? field.max ?? field.score_max ?? 10),
-    score_type: normalizeScoreType(field.score_type ?? field.type ?? field.group ?? field.category)
-  })).filter(field => field.label);
+  scoreTypes = normalizeScoreTypes(scoreTypes);
+  const normalized = fields.map((field, index) => {
+    const typeId = normalizeScoreType(field.score_type ?? field.type ?? field.group ?? field.category);
+    const meta = scoreTypeMeta(typeId, field);
+    return {
+      id: String(field.id || `field_${index + 1}`).trim() || `field_${index + 1}`,
+      label: String(field.label || '').trim(),
+      max_score: normalizeMaxScore(field.max_score ?? field.maxScore ?? field.max ?? field.score_max ?? 10),
+      score_type: typeId,
+      score_type_label: String(field.score_type_label || field.type_label || meta.label || typeId),
+      score_type_include_total: normalizeBool(field.score_type_include_total ?? field.include_total ?? field.includeTotal, meta.include_total)
+    };
+  }).filter(field => field.label);
   return normalized.length ? normalized : defaultScoreFields.map(item => ({ ...item }));
 }
 
@@ -170,6 +222,7 @@ async function requestJson(path, options = {}) {
 
 async function loadStyles() {
   const data = await requestJson('/api/public/styles');
+  scoreTypes = normalizeScoreTypes(data.score_types || defaultScoreTypes);
   scoreFields = normalizeScoreFields(data.score_fields || defaultScoreFields);
   styles = data.styles || [];
   drafts = styles.map(makeDraft);
@@ -185,6 +238,22 @@ function renderScoreRows(fields, draft) {
       <input data-field="${escapeHtml(field.id)}" type="range" min="0" max="${normalizeMaxScore(field.max_score)}" step="1" value="${Number(draft.scores[field.id] || 0)}" ${draft.submitted ? 'disabled' : ''} />
       <output>${Number(draft.scores[field.id] || 0)} / ${normalizeMaxScore(field.max_score)}</output>
     </label>
+  `).join('');
+}
+
+
+function renderNonTotalScorePanels(draft) {
+  const groups = new Map();
+  scoreFields.filter(field => !isMainScoreField(field)).forEach(field => {
+    const meta = scoreTypeMeta(field.score_type, field);
+    if (!groups.has(meta.id)) groups.set(meta.id, { ...meta, fields: [] });
+    groups.get(meta.id).fields.push(field);
+  });
+  return Array.from(groups.values()).map(group => `
+    <fieldset class="mobile-score-panel independent-score-panel">
+      <legend>${escapeHtml(group.label)}，不计入综合总分 <span class="required">*</span></legend>
+      ${renderScoreRows(group.fields, draft)}
+    </fieldset>
   `).join('');
 }
 
@@ -234,17 +303,13 @@ function renderSlides() {
               <em data-role="grade">${draft.grade}</em>
             </div>
           </fieldset>
-          ${scoreFields.some(field => !isMainScoreField(field)) ? `
-            <fieldset class="mobile-score-panel independent-score-panel">
-              <legend>独立评分，不计入总分 <span class="required">*</span></legend>
-              ${renderScoreRows(scoreFields.filter(field => !isMainScoreField(field)), draft)}
-            </fieldset>
-          ` : ''}
 
           <label class="wide public-remark">
             备注
             <textarea data-field="remark" rows="3" placeholder="可填写对当前款的补充意见" ${draft.submitted ? 'disabled' : ''}>${escapeHtml(draft.remark)}</textarea>
           </label>
+
+          ${renderNonTotalScorePanels(draft)}
         </div>
       </article>
     `;
@@ -367,6 +432,8 @@ async function submitCurrentAndNext() {
           label: field.label,
           max_score: normalizeMaxScore(field.max_score),
           score_type: normalizeScoreType(field.score_type),
+          score_type_label: scoreTypeLabel(field.score_type, field),
+          score_type_include_total: isMainScoreField(field),
           score: Number(item.scores[field.id] || 0)
         }))
       }))

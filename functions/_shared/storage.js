@@ -1,9 +1,14 @@
+export const DEFAULT_SCORE_TYPES = [
+  { id: 'main', label: '综合评分', include_total: true },
+  { id: 'independent', label: '独立评分', include_total: false }
+];
+
 export const DEFAULT_SCORE_FIELDS = [
-  { id: 'appearance', key: 'appearance_score', label: '外观设计', max_score: 10, score_type: 'main' },
-  { id: 'material', key: 'material_score', label: '材质触感', max_score: 10, score_type: 'main' },
-  { id: 'craftsmanship', key: 'craftsmanship_score', label: '工艺细节', max_score: 10, score_type: 'main' },
-  { id: 'capacity', key: 'capacity_score', label: '容量收纳', max_score: 10, score_type: 'main' },
-  { id: 'comfort', key: 'comfort_score', label: '背负舒适度', max_score: 10, score_type: 'main' }
+  { id: 'appearance', key: 'appearance_score', label: '外观设计', max_score: 10, score_type: 'main', score_type_label: '综合评分', score_type_include_total: true },
+  { id: 'material', key: 'material_score', label: '材质触感', max_score: 10, score_type: 'main', score_type_label: '综合评分', score_type_include_total: true },
+  { id: 'craftsmanship', key: 'craftsmanship_score', label: '工艺细节', max_score: 10, score_type: 'main', score_type_label: '综合评分', score_type_include_total: true },
+  { id: 'capacity', key: 'capacity_score', label: '容量收纳', max_score: 10, score_type: 'main', score_type_label: '综合评分', score_type_include_total: true },
+  { id: 'comfort', key: 'comfort_score', label: '背负舒适度', max_score: 10, score_type: 'main', score_type_label: '综合评分', score_type_include_total: true }
 ];
 
 
@@ -117,13 +122,58 @@ function normalizeMaxScore(value) {
   return Math.max(1, Math.min(100, n));
 }
 
+function makeScoreTypeId(value, index = 0) {
+  const raw = String(value || '').trim();
+  const lowered = raw.toLowerCase();
+  if (['main', 'general', 'total', '综合', '综合评分', '计入总分'].includes(lowered)) return 'main';
+  if (['independent', 'standalone', 'single', 'extra', 'separate', '独立', '独立评分', '不计入总分'].includes(lowered)) return 'independent';
+  return raw.replace(/[^a-zA-Z0-9_\u4e00-\u9fa5-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 48) || `type_${index + 1}`;
+}
+
 function normalizeScoreType(value) {
-  const raw = String(value ?? '').trim().toLowerCase();
-  if (['independent', 'standalone', 'single', 'extra', 'separate', '独立', '独立评分'].includes(raw)) return 'independent';
-  return 'main';
+  return makeScoreTypeId(value, 0);
+}
+
+export function normalizeScoreTypes(value) {
+  let list = value;
+  if (typeof value === 'string') {
+    try { list = JSON.parse(value); } catch { list = null; }
+  }
+  if (!Array.isArray(list)) list = DEFAULT_SCORE_TYPES;
+  const used = new Set();
+  const types = [];
+  for (let i = 0; i < list.length; i++) {
+    const item = list[i] || {};
+    const label = String(item.label || item.name || item.title || '').trim();
+    if (!label) continue;
+    let id = makeScoreTypeId(item.id || item.key || label, i);
+    let suffix = 2;
+    const base = id;
+    while (used.has(id)) id = `${base}_${suffix++}`;
+    used.add(id);
+    const include_total = normalizeBoolSetting(item.include_total ?? item.includeTotal ?? item.counts_in_total ?? item.countsInTotal, id !== 'independent');
+    types.push({ id, label, include_total });
+    if (types.length >= 20) break;
+  }
+  return types.length ? types : DEFAULT_SCORE_TYPES.map(item => ({ ...item }));
+}
+
+function scoreTypeMeta(typeId, scoreTypes = DEFAULT_SCORE_TYPES, fallback = {}) {
+  const id = normalizeScoreType(typeId || fallback.score_type || fallback.type || 'main');
+  const types = normalizeScoreTypes(scoreTypes);
+  const found = types.find(item => item.id === id);
+  if (found) return found;
+  return {
+    id,
+    label: String(fallback.score_type_label || fallback.type_label || fallback.label || id || '综合评分'),
+    include_total: normalizeBoolSetting(fallback.score_type_include_total ?? fallback.include_total ?? fallback.includeTotal, id !== 'independent')
+  };
 }
 
 function isMainScoreField(field) {
+  if (field && (Object.prototype.hasOwnProperty.call(field, 'score_type_include_total') || Object.prototype.hasOwnProperty.call(field, 'include_total') || Object.prototype.hasOwnProperty.call(field, 'includeTotal'))) {
+    return normalizeBoolSetting(field.score_type_include_total ?? field.include_total ?? field.includeTotal, true);
+  }
   return normalizeScoreType(field?.score_type ?? field?.type ?? field?.group ?? field?.category) !== 'independent';
 }
 
@@ -173,7 +223,7 @@ function makeFieldId(value, index) {
   return normalized || `field_${index + 1}`;
 }
 
-export function normalizeScoreFields(value) {
+export function normalizeScoreFields(value, scoreTypes = DEFAULT_SCORE_TYPES) {
   let list = value;
   if (typeof value === 'string') {
     try { list = JSON.parse(value); } catch { list = null; }
@@ -193,10 +243,13 @@ export function normalizeScoreFields(value) {
     used.add(id);
     const max_score = normalizeMaxScore(item.max_score ?? item.maxScore ?? item.max ?? item.score_max ?? 10);
     const score_type = normalizeScoreType(item.score_type ?? item.type ?? item.group ?? item.category);
-    fields.push({ id, label, max_score, score_type });
+    const meta = scoreTypeMeta(score_type, scoreTypes, item);
+    const include_total = normalizeBoolSetting(item.score_type_include_total ?? item.include_total ?? item.includeTotal, meta.include_total);
+    const score_type_label = String(item.score_type_label || item.type_label || meta.label || score_type).trim() || score_type;
+    fields.push({ id, label, max_score, score_type, score_type_label, score_type_include_total: include_total });
     if (fields.length >= 20) break;
   }
-  return fields.length ? fields : DEFAULT_SCORE_FIELDS.map(({ id, label, max_score, score_type }) => ({ id, label, max_score, score_type: score_type || 'main' }));
+  return fields.length ? fields : DEFAULT_SCORE_FIELDS.map(({ id, label, max_score, score_type, score_type_label, score_type_include_total }) => ({ id, label, max_score, score_type: score_type || 'main', score_type_label: score_type_label || '综合评分', score_type_include_total: score_type_include_total !== false }));
 }
 
 export function normalizeStylePayload(payload = {}) {
@@ -227,7 +280,7 @@ function fieldsFromPayloadOrDefault(payload, scoreFields) {
   const configured = normalizeScoreFields(scoreFields);
   if (configured.length) return configured;
   if (Array.isArray(payload.score_items) && payload.score_items.length) {
-    return normalizeScoreFields(payload.score_items.map(item => ({ id: item.id, label: item.label || item.name, max_score: item.max_score ?? item.maxScore ?? item.max, score_type: item.score_type ?? item.type ?? item.group ?? item.category })));
+    return normalizeScoreFields(payload.score_items.map(item => ({ id: item.id, label: item.label || item.name, max_score: item.max_score ?? item.maxScore ?? item.max, score_type: item.score_type ?? item.type ?? item.group ?? item.category, score_type_label: item.score_type_label ?? item.type_label, score_type_include_total: item.score_type_include_total ?? item.include_total })), scoreFields);
   }
   return configured;
 }
@@ -256,12 +309,14 @@ export function normalizeScorePayload(payload = {}, scoreFields = DEFAULT_SCORE_
     const source = payloadItemsById.get(field.id) || field;
     const max_score = normalizeMaxScore(field.max_score);
     const score_type = normalizeScoreType(field.score_type ?? source.score_type);
+    const score_type_label = String(field.score_type_label || source.score_type_label || score_typeMeta(score_type).label || score_type);
+    const score_type_include_total = isMainScoreField(field);
     const score = toRequiredScore(getScoreValueFromPayload(payload, { ...field, score: source.score }), field.label, max_score);
-    if (isMainScoreField({ score_type })) {
+    if (score_type_include_total) {
       total += score;
       maxTotal += max_score;
     }
-    return { id: field.id, label: field.label, score, max_score, score_type };
+    return { id: field.id, label: field.label, score, max_score, score_type, score_type_label, score_type_include_total };
   });
   data.score_items_json = JSON.stringify(data.score_items);
   data.total_score = total;
@@ -317,14 +372,16 @@ function parseScoreItems(row, fallbackFields = DEFAULT_SCORE_FIELDS) {
           label: String(item.label || item.name || LEGACY_LABEL_BY_ID[item.id] || `评分项${index + 1}`),
           score: Number(item.score || 0),
           max_score: normalizeMaxScore(item.max_score ?? item.maxScore ?? item.max ?? fallbackFields[index]?.max_score),
-          score_type: normalizeScoreType(item.score_type ?? item.type ?? item.group ?? item.category ?? fallbackFields[index]?.score_type)
+          score_type: normalizeScoreType(item.score_type ?? item.type ?? item.group ?? item.category ?? fallbackFields[index]?.score_type),
+          score_type_label: String(item.score_type_label || item.type_label || fallbackFields[index]?.score_type_label || scoreTypeMeta(item.score_type ?? fallbackFields[index]?.score_type).label),
+          score_type_include_total: normalizeBoolSetting(item.score_type_include_total ?? item.include_total ?? fallbackFields[index]?.score_type_include_total, scoreTypeMeta(item.score_type ?? fallbackFields[index]?.score_type).include_total)
         }));
       }
     } catch {}
   }
   return normalizeScoreFields(fallbackFields).map(field => {
     const key = LEGACY_KEY_BY_ID[field.id] || field.key;
-    return { id: field.id, label: field.label, score: key ? Number(row[key] || 0) : 0, max_score: normalizeMaxScore(field.max_score), score_type: normalizeScoreType(field.score_type) };
+    return { id: field.id, label: field.label, score: key ? Number(row[key] || 0) : 0, max_score: normalizeMaxScore(field.max_score), score_type: normalizeScoreType(field.score_type), score_type_label: field.score_type_label || scoreTypeMeta(field.score_type).label, score_type_include_total: isMainScoreField(field) }; 
   });
 }
 
@@ -420,9 +477,15 @@ function createD1Storage(env) {
     `).bind(key, String(value)).run();
   }
 
+  async function getScoreTypes() {
+    const value = await getSetting('score_types', JSON.stringify(DEFAULT_SCORE_TYPES));
+    return normalizeScoreTypes(value);
+  }
+
   async function getScoreFields() {
+    const types = await getScoreTypes();
     const value = await getSetting('score_fields', JSON.stringify(DEFAULT_SCORE_FIELDS));
-    return normalizeScoreFields(value);
+    return normalizeScoreFields(value, types);
   }
 
   async function getStyleById(id) {
@@ -593,10 +656,19 @@ function createD1Storage(env) {
       return value;
     },
 
+    async getScoreTypes() { return getScoreTypes(); },
+
+    async setScoreTypes(types) {
+      const normalized = normalizeScoreTypes(types);
+      await setSetting('score_types', JSON.stringify(normalized));
+      return normalized;
+    },
+
     async getScoreFields() { return getScoreFields(); },
 
     async setScoreFields(fields) {
-      const normalized = normalizeScoreFields(fields);
+      const types = await getScoreTypes();
+      const normalized = normalizeScoreFields(fields, types);
       await setSetting('score_fields', JSON.stringify(normalized));
       return normalized;
     },
@@ -638,6 +710,7 @@ function createKVStorage(env) {
   async function setIndex(name, ids) { await putJson(key(`${name}:index`), Array.from(new Set(ids.map(String)))); }
   async function getSettings() { return getJson(key('settings'), {}); }
   async function setSettings(settings) { await putJson(key('settings'), settings); }
+  async function getScoreTypesSetting() { const s = await getSettings(); return normalizeScoreTypes(s.score_types || DEFAULT_SCORE_TYPES); }
   async function getStyleById(id) { return id ? getJson(keyStyle(String(id)), null) : null; }
   async function getScoreById(id) {
     const row = id ? await getJson(keyScore(String(id)), null) : null;
@@ -645,7 +718,7 @@ function createKVStorage(env) {
   }
   async function getScoreFields() {
     const s = await getSettings();
-    return normalizeScoreFields(s.score_fields || DEFAULT_SCORE_FIELDS);
+    return normalizeScoreFields(s.score_fields || DEFAULT_SCORE_FIELDS, normalizeScoreTypes(s.score_types || DEFAULT_SCORE_TYPES));
   }
   async function addScoreHistory(scoreId, action, snapshot) {
     const id = String(scoreId);
@@ -750,8 +823,10 @@ function createKVStorage(env) {
     async getScoreHistory(id) { return getJson(keyScoreHistory(String(id)), []); },
     async getScorePageCount() { const s = await getSettings(); return safeCount(s.score_page_count || '3', 3); },
     async setScorePageCount(count) { const s = await getSettings(); s.score_page_count = safeCount(count, 1); await setSettings(s); return s.score_page_count; },
+    async getScoreTypes() { return getScoreTypesSetting(); },
+    async setScoreTypes(types) { const s = await getSettings(); s.score_types = normalizeScoreTypes(types); await setSettings(s); return s.score_types; },
     async getScoreFields() { return getScoreFields(); },
-    async setScoreFields(fields) { const s = await getSettings(); s.score_fields = normalizeScoreFields(fields); await setSettings(s); return s.score_fields; },
+    async setScoreFields(fields) { const s = await getSettings(); s.score_fields = normalizeScoreFields(fields, normalizeScoreTypes(s.score_types || DEFAULT_SCORE_TYPES)); await setSettings(s); return s.score_fields; },
     async getImageSettings() { const s = await getSettings(); return normalizeImageSettings(s.image_storage_settings || {}, imageSettingsFromEnv(env)); },
     async setImageSettings(settings) { const s = await getSettings(); const current = normalizeImageSettings(s.image_storage_settings || {}, imageSettingsFromEnv(env)); s.image_storage_settings = normalizeImageSettings(settings, current); await setSettings(s); return s.image_storage_settings; }
   };
@@ -783,8 +858,10 @@ function createHttpStorage(env) {
     async getScoreHistory(id) { return (await call(`/scores/${encodeURIComponent(id)}/history`)).history || []; },
     async getScorePageCount() { return Number((await call('/settings')).settings?.score_page_count || 3); },
     async setScorePageCount(count) { return Number((await call('/settings', { method: 'PUT', body: JSON.stringify({ score_page_count: count }) })).settings?.score_page_count || count); },
-    async getScoreFields() { return normalizeScoreFields((await call('/settings')).settings?.score_fields || DEFAULT_SCORE_FIELDS); },
-    async setScoreFields(fields) { return normalizeScoreFields((await call('/settings', { method: 'PUT', body: JSON.stringify({ score_fields: normalizeScoreFields(fields) }) })).settings?.score_fields || fields); },
+    async getScoreTypes() { return normalizeScoreTypes((await call('/settings')).settings?.score_types || DEFAULT_SCORE_TYPES); },
+    async setScoreTypes(types) { return normalizeScoreTypes((await call('/settings', { method: 'PUT', body: JSON.stringify({ score_types: normalizeScoreTypes(types) }) })).settings?.score_types || types); },
+    async getScoreFields() { const settings = (await call('/settings')).settings || {}; return normalizeScoreFields(settings.score_fields || DEFAULT_SCORE_FIELDS, settings.score_types || DEFAULT_SCORE_TYPES); },
+    async setScoreFields(fields) { const settings = (await call('/settings', { method: 'PUT', body: JSON.stringify({ score_fields: fields }) })).settings || {}; return normalizeScoreFields(settings.score_fields || fields, settings.score_types || DEFAULT_SCORE_TYPES); },
     async getImageSettings() { return normalizeImageSettings((await call('/settings')).settings?.image_settings || {}, imageSettingsFromEnv(env)); },
     async setImageSettings(settings) { return normalizeImageSettings((await call('/settings', { method: 'PUT', body: JSON.stringify({ image_settings: settings }) })).settings?.image_settings || settings, imageSettingsFromEnv(env)); }
   };
