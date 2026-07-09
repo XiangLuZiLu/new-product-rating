@@ -1,9 +1,9 @@
 export const DEFAULT_SCORE_FIELDS = [
-  { id: 'appearance', key: 'appearance_score', label: '外观设计', max_score: 10 },
-  { id: 'material', key: 'material_score', label: '材质触感', max_score: 10 },
-  { id: 'craftsmanship', key: 'craftsmanship_score', label: '工艺细节', max_score: 10 },
-  { id: 'capacity', key: 'capacity_score', label: '容量收纳', max_score: 10 },
-  { id: 'comfort', key: 'comfort_score', label: '背负舒适度', max_score: 10 }
+  { id: 'appearance', key: 'appearance_score', label: '外观设计', max_score: 10, score_type: 'main' },
+  { id: 'material', key: 'material_score', label: '材质触感', max_score: 10, score_type: 'main' },
+  { id: 'craftsmanship', key: 'craftsmanship_score', label: '工艺细节', max_score: 10, score_type: 'main' },
+  { id: 'capacity', key: 'capacity_score', label: '容量收纳', max_score: 10, score_type: 'main' },
+  { id: 'comfort', key: 'comfort_score', label: '背负舒适度', max_score: 10, score_type: 'main' }
 ];
 
 
@@ -93,7 +93,8 @@ const LEGACY_LABEL_BY_ID = Object.fromEntries(DEFAULT_SCORE_FIELDS.map(item => [
 
 export function gradeByScore(total, maxTotal = 50) {
   const max = Number(maxTotal);
-  const rate = Number.isFinite(max) && max > 0 ? Number(total || 0) / max : 0;
+  if (!Number.isFinite(max) || max <= 0) return '不参与评级';
+  const rate = Number(total || 0) / max;
   if (rate >= 0.8) return '大单';
   if (rate >= 0.6) return '中单';
   if (rate >= 0.4) return '小单试水';
@@ -114,6 +115,16 @@ function normalizeMaxScore(value) {
   const n = Number.parseInt(value ?? 10, 10);
   if (!Number.isFinite(n) || n <= 0) return 10;
   return Math.max(1, Math.min(100, n));
+}
+
+function normalizeScoreType(value) {
+  const raw = String(value ?? '').trim().toLowerCase();
+  if (['independent', 'standalone', 'single', 'extra', 'separate', '独立', '独立评分'].includes(raw)) return 'independent';
+  return 'main';
+}
+
+function isMainScoreField(field) {
+  return normalizeScoreType(field?.score_type ?? field?.type ?? field?.group ?? field?.category) !== 'independent';
 }
 
 function toScore(value, label, maxScore = 10) {
@@ -181,10 +192,11 @@ export function normalizeScoreFields(value) {
     while (used.has(id)) id = `${base}_${suffix++}`;
     used.add(id);
     const max_score = normalizeMaxScore(item.max_score ?? item.maxScore ?? item.max ?? item.score_max ?? 10);
-    fields.push({ id, label, max_score });
+    const score_type = normalizeScoreType(item.score_type ?? item.type ?? item.group ?? item.category);
+    fields.push({ id, label, max_score, score_type });
     if (fields.length >= 20) break;
   }
-  return fields.length ? fields : DEFAULT_SCORE_FIELDS.map(({ id, label, max_score }) => ({ id, label, max_score }));
+  return fields.length ? fields : DEFAULT_SCORE_FIELDS.map(({ id, label, max_score, score_type }) => ({ id, label, max_score, score_type: score_type || 'main' }));
 }
 
 export function normalizeStylePayload(payload = {}) {
@@ -215,7 +227,7 @@ function fieldsFromPayloadOrDefault(payload, scoreFields) {
   const configured = normalizeScoreFields(scoreFields);
   if (configured.length) return configured;
   if (Array.isArray(payload.score_items) && payload.score_items.length) {
-    return normalizeScoreFields(payload.score_items.map(item => ({ id: item.id, label: item.label || item.name, max_score: item.max_score ?? item.maxScore ?? item.max })));
+    return normalizeScoreFields(payload.score_items.map(item => ({ id: item.id, label: item.label || item.name, max_score: item.max_score ?? item.maxScore ?? item.max, score_type: item.score_type ?? item.type ?? item.group ?? item.category })));
   }
   return configured;
 }
@@ -227,6 +239,10 @@ export function normalizeScorePayload(payload = {}, scoreFields = DEFAULT_SCORE_
     reviewer: String(payload.reviewer || '').trim(),
     review_date: String(payload.review_date || today()).trim(),
     remark: String(payload.remark || '').trim(),
+    product_image: String(payload.product_image || '').trim(),
+    style_code: String(payload.style_code || '').trim(),
+    season: String(payload.season || '').trim(),
+    base_price: Object.prototype.hasOwnProperty.call(payload, 'base_price') ? toPrice(payload.base_price) : undefined,
     submission_id: String(payload.submission_id || '').trim(),
     submitted_at: String(payload.submitted_at || '').trim()
   };
@@ -239,10 +255,13 @@ export function normalizeScorePayload(payload = {}, scoreFields = DEFAULT_SCORE_
   data.score_items = fields.map(field => {
     const source = payloadItemsById.get(field.id) || field;
     const max_score = normalizeMaxScore(field.max_score);
+    const score_type = normalizeScoreType(field.score_type ?? source.score_type);
     const score = toRequiredScore(getScoreValueFromPayload(payload, { ...field, score: source.score }), field.label, max_score);
-    total += score;
-    maxTotal += max_score;
-    return { id: field.id, label: field.label, score, max_score };
+    if (isMainScoreField({ score_type })) {
+      total += score;
+      maxTotal += max_score;
+    }
+    return { id: field.id, label: field.label, score, max_score, score_type };
   });
   data.score_items_json = JSON.stringify(data.score_items);
   data.total_score = total;
@@ -297,14 +316,15 @@ function parseScoreItems(row, fallbackFields = DEFAULT_SCORE_FIELDS) {
           id: makeFieldId(item.id || item.key || `field_${index + 1}`, index),
           label: String(item.label || item.name || LEGACY_LABEL_BY_ID[item.id] || `评分项${index + 1}`),
           score: Number(item.score || 0),
-          max_score: normalizeMaxScore(item.max_score ?? item.maxScore ?? item.max ?? fallbackFields[index]?.max_score)
+          max_score: normalizeMaxScore(item.max_score ?? item.maxScore ?? item.max ?? fallbackFields[index]?.max_score),
+          score_type: normalizeScoreType(item.score_type ?? item.type ?? item.group ?? item.category ?? fallbackFields[index]?.score_type)
         }));
       }
     } catch {}
   }
   return normalizeScoreFields(fallbackFields).map(field => {
     const key = LEGACY_KEY_BY_ID[field.id] || field.key;
-    return { id: field.id, label: field.label, score: key ? Number(row[key] || 0) : 0, max_score: normalizeMaxScore(field.max_score) };
+    return { id: field.id, label: field.label, score: key ? Number(row[key] || 0) : 0, max_score: normalizeMaxScore(field.max_score), score_type: normalizeScoreType(field.score_type) };
   });
 }
 
@@ -480,7 +500,11 @@ function createD1Storage(env) {
           total_score, grade, remark, reviewer, review_date, submission_id, submitted_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).bind(
-        style.id, style.product_image || '', style.style_code, style.season || '', style.base_price,
+        style.id,
+        data.product_image || style.product_image || '',
+        data.style_code || style.style_code,
+        data.season || style.season || '',
+        Object.prototype.hasOwnProperty.call(data, 'base_price') && data.base_price !== undefined ? data.base_price : style.base_price,
         data.appearance_score, data.material_score, data.craftsmanship_score, data.capacity_score, data.comfort_score, data.score_items_json,
         data.total_score, data.grade, data.remark, data.reviewer, data.review_date,
         data.submission_id || newSubmissionId(), data.submitted_at || nowDateTime()
@@ -517,6 +541,10 @@ function createD1Storage(env) {
       if (!old) { const error = new Error('评分记录不存在'); error.status = 404; throw error; }
       const style = await getStyleById(data.style_id || old.style_id);
       if (!style) throw new Error('关联款式不存在');
+      const snapshotProductImage = data.product_image || old.product_image || style.product_image || '';
+      const snapshotStyleCode = data.style_code || old.style_code || style.style_code;
+      const snapshotSeason = Object.prototype.hasOwnProperty.call(data, 'season') && data.season !== '' ? data.season : (old.season || style.season || '');
+      const snapshotBasePrice = Object.prototype.hasOwnProperty.call(data, 'base_price') && data.base_price !== undefined ? data.base_price : (old.base_price ?? style.base_price);
       await DB().prepare(`
         UPDATE review_scores SET
           style_id = ?, product_image = ?, style_code = ?, season = ?, base_price = ?,
@@ -524,7 +552,11 @@ function createD1Storage(env) {
           total_score = ?, grade = ?, remark = ?, reviewer = ?, review_date = ?, updated_at = datetime('now')
         WHERE id = ? AND deleted_at IS NULL
       `).bind(
-        style.id, style.product_image || '', style.style_code, style.season || '', style.base_price,
+        style.id,
+        snapshotProductImage,
+        snapshotStyleCode,
+        snapshotSeason,
+        snapshotBasePrice,
         data.appearance_score, data.material_score, data.craftsmanship_score, data.capacity_score, data.comfort_score, data.score_items_json,
         data.total_score, data.grade, data.remark, data.reviewer, data.review_date, toIntId(id, '评分ID')
       ).run();
@@ -663,10 +695,10 @@ function createKVStorage(env) {
         submission_id: data.submission_id || newSubmissionId(),
         submitted_at: data.submitted_at || now(),
         style_id: style.id,
-        product_image: style.product_image || '',
-        style_code: style.style_code,
-        season: style.season || '',
-        base_price: style.base_price,
+        product_image: data.product_image || style.product_image || '',
+        style_code: data.style_code || style.style_code,
+        season: data.season || style.season || '',
+        base_price: Object.prototype.hasOwnProperty.call(data, 'base_price') && data.base_price !== undefined ? data.base_price : style.base_price,
         created_at: now(), updated_at: now(), deleted_at: null
       };
       await putJson(keyScore(id), row);
@@ -694,7 +726,16 @@ function createKVStorage(env) {
       if (!old || old.deleted_at) throw new Error('评分记录不存在');
       const style = await getStyleById(data.style_id || old.style_id);
       if (!style) throw new Error('关联款式不存在');
-      const row = { ...old, ...data, style_id: style.id, product_image: style.product_image || '', style_code: style.style_code, season: style.season || '', base_price: style.base_price, updated_at: now() };
+      const row = {
+        ...old,
+        ...data,
+        style_id: style.id,
+        product_image: data.product_image || old.product_image || style.product_image || '',
+        style_code: data.style_code || old.style_code || style.style_code,
+        season: Object.prototype.hasOwnProperty.call(data, 'season') && data.season !== '' ? data.season : (old.season || style.season || ''),
+        base_price: Object.prototype.hasOwnProperty.call(data, 'base_price') && data.base_price !== undefined ? data.base_price : (old.base_price ?? style.base_price),
+        updated_at: now()
+      };
       await putJson(keyScore(String(id)), row);
       await addScoreHistory(id, 'update', { before: old, after: row });
       return attachScoreItems(row, await getScoreFields());

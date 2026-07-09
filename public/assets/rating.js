@@ -1,3 +1,4 @@
+console.info("product-review rating version: 20260624-editable-snapshot-fieldtypes-v1");
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
@@ -19,11 +20,11 @@ const doneText = $('#doneText');
 const restartBtn = $('#restartBtn');
 
 const defaultScoreFields = [
-  { id: 'appearance', label: '外观设计', max_score: 10 },
-  { id: 'material', label: '材质触感', max_score: 10 },
-  { id: 'craftsmanship', label: '工艺细节', max_score: 10 },
-  { id: 'capacity', label: '容量收纳', max_score: 10 },
-  { id: 'comfort', label: '背负舒适度', max_score: 10 }
+  { id: 'appearance', label: '外观设计', max_score: 10, score_type: 'main' },
+  { id: 'material', label: '材质触感', max_score: 10, score_type: 'main' },
+  { id: 'craftsmanship', label: '工艺细节', max_score: 10, score_type: 'main' },
+  { id: 'capacity', label: '容量收纳', max_score: 10, score_type: 'main' },
+  { id: 'comfort', label: '背负舒适度', max_score: 10, score_type: 'main' }
 ];
 
 let scoreFields = defaultScoreFields.map(item => ({ ...item }));
@@ -54,12 +55,28 @@ function normalizeMaxScore(value) {
   return Math.max(1, Math.min(100, n));
 }
 
+function normalizeScoreType(value) {
+  const raw = String(value ?? '').trim().toLowerCase();
+  if (['independent', 'standalone', 'single', 'extra', 'separate', '独立', '独立评分'].includes(raw)) return 'independent';
+  return 'main';
+}
+function isMainScoreField(field) {
+  return normalizeScoreType(field?.score_type ?? field?.type ?? field?.group ?? field?.category) !== 'independent';
+}
+function getMainScoreFields() {
+  return scoreFields.filter(isMainScoreField);
+}
+function sumMaxScore(fields) {
+  return fields.reduce((sum, field) => sum + normalizeMaxScore(field.max_score), 0);
+}
+
 function normalizeScoreFields(fields) {
   if (!Array.isArray(fields)) return defaultScoreFields.map(item => ({ ...item }));
   const normalized = fields.map((field, index) => ({
     id: String(field.id || `field_${index + 1}`).trim() || `field_${index + 1}`,
     label: String(field.label || '').trim(),
-    max_score: normalizeMaxScore(field.max_score ?? field.maxScore ?? field.max ?? field.score_max ?? 10)
+    max_score: normalizeMaxScore(field.max_score ?? field.maxScore ?? field.max ?? field.score_max ?? 10),
+    score_type: normalizeScoreType(field.score_type ?? field.type ?? field.group ?? field.category)
   })).filter(field => field.label);
   return normalized.length ? normalized : defaultScoreFields.map(item => ({ ...item }));
 }
@@ -74,7 +91,8 @@ function showMessage(text, type = 'success') {
 
 function gradeByScore(total, maxTotal = 50) {
   const max = Number(maxTotal);
-  const rate = Number.isFinite(max) && max > 0 ? Number(total || 0) / max : 0;
+  if (!Number.isFinite(max) || max <= 0) return '不参与评级';
+  const rate = Number(total || 0) / max;
   if (rate >= 0.8) return '大单';
   if (rate >= 0.6) return '中单';
   if (rate >= 0.4) return '小单试水';
@@ -82,18 +100,24 @@ function gradeByScore(total, maxTotal = 50) {
 }
 
 function makeDraft(style) {
+  const mainFields = scoreFields.filter(isMainScoreField);
+  const maxTotal = sumMaxScore(mainFields);
   return {
     style_id: style.id,
     reviewer,
     review_date: today(),
+    product_image: style.product_image || '',
+    style_code: style.style_code || '',
+    season: style.season || '',
+    base_price: style.base_price ?? '',
     remark: '',
     submitted: false,
     score_id: null,
     scores: Object.fromEntries(scoreFields.map(field => [field.id, 0])),
     touched_scores: Object.fromEntries(scoreFields.map(field => [field.id, false])),
     total_score: 0,
-    max_total_score: scoreFields.reduce((sum, field) => sum + normalizeMaxScore(field.max_score), 0),
-    grade: gradeByScore(0, scoreFields.reduce((sum, field) => sum + normalizeMaxScore(field.max_score), 0))
+    max_total_score: maxTotal,
+    grade: gradeByScore(0, maxTotal)
   };
 }
 
@@ -106,8 +130,10 @@ function calculate(index) {
     const max = normalizeMaxScore(field.max_score);
     const value = Math.min(max, Math.max(0, Number.parseInt(draft.scores?.[field.id], 10) || 0));
     draft.scores[field.id] = value;
-    total += value;
-    maxTotal += max;
+    if (isMainScoreField(field)) {
+      total += value;
+      maxTotal += max;
+    }
   }
   draft.total_score = total;
   draft.max_total_score = maxTotal;
@@ -151,6 +177,17 @@ async function loadStyles() {
   renderSlides();
 }
 
+
+function renderScoreRows(fields, draft) {
+  return fields.map(field => `
+    <label class="score-row">
+      <span>${escapeHtml(field.label)}</span>
+      <input data-field="${escapeHtml(field.id)}" type="range" min="0" max="${normalizeMaxScore(field.max_score)}" step="1" value="${Number(draft.scores[field.id] || 0)}" ${draft.submitted ? 'disabled' : ''} />
+      <output>${Number(draft.scores[field.id] || 0)} / ${normalizeMaxScore(field.max_score)}</output>
+    </label>
+  `).join('');
+}
+
 function renderSlides() {
   isRendering = true;
   drafts.forEach((_, index) => calculate(index));
@@ -180,28 +217,29 @@ function renderSlides() {
 
           <div class="public-style-card">
             ${image}
-            <div class="public-style-info">
-              <div><span>季节</span><strong>${escapeHtml(style.season || '-')}</strong></div>
-              <div><span>基本售价</span><strong>${style.base_price == null ? '-' : Number(style.base_price).toLocaleString('zh-CN', { maximumFractionDigits: 2 })}</strong></div>
+            <div class="public-style-info editable-style-info">
+              <label>季节<input data-field="season" value="${escapeHtml(draft.season || '')}" placeholder="可修改本次评分季节" ${draft.submitted ? 'disabled' : ''} /></label>
+              <label>基本售价<input data-field="base_price" type="number" min="0" step="0.01" value="${escapeHtml(draft.base_price ?? '')}" placeholder="可修改本次评分售价" ${draft.submitted ? 'disabled' : ''} /></label>
               ${style.style_remark ? `<p>${escapeHtml(style.style_remark)}</p>` : ''}
+              <small>这里的修改只保存到本次评分记录，不会影响后台已配置款式。</small>
             </div>
           </div>
 
           <fieldset class="mobile-score-panel">
-            <legend>滑动评分，按后台设置满分 <span class="required">*</span></legend>
-            ${scoreFields.map(field => `
-              <label class="score-row">
-                <span>${escapeHtml(field.label)}</span>
-                <input data-field="${escapeHtml(field.id)}" type="range" min="0" max="${normalizeMaxScore(field.max_score)}" step="1" value="${Number(draft.scores[field.id] || 0)}" ${draft.submitted ? 'disabled' : ''} />
-                <output>${Number(draft.scores[field.id] || 0)} / ${normalizeMaxScore(field.max_score)}</output>
-              </label>
-            `).join('')}
+            <legend>综合评分，计入总分 <span class="required">*</span></legend>
+            ${renderScoreRows(scoreFields.filter(isMainScoreField), draft) || '<p class="tip">暂无综合评分项。</p>'}
             <div class="total-box">
-              <span>总分</span>
+              <span>综合总分</span>
               <strong data-role="total">${draft.total_score} / ${draft.max_total_score}</strong>
               <em data-role="grade">${draft.grade}</em>
             </div>
           </fieldset>
+          ${scoreFields.some(field => !isMainScoreField(field)) ? `
+            <fieldset class="mobile-score-panel independent-score-panel">
+              <legend>独立评分，不计入总分 <span class="required">*</span></legend>
+              ${renderScoreRows(scoreFields.filter(field => !isMainScoreField(field)), draft)}
+            </fieldset>
+          ` : ''}
 
           <label class="wide public-remark">
             备注
@@ -318,12 +356,17 @@ async function submitCurrentAndNext() {
       scores: drafts.map((item, index) => ({
         reviewer,
         style_id: styles[index].id,
+        product_image: item.product_image || styles[index].product_image || '',
+        style_code: item.style_code || styles[index].style_code || '',
+        season: item.season || '',
+        base_price: item.base_price,
         review_date: today(),
         remark: item.remark,
         score_items: scoreFields.map(field => ({
           id: field.id,
           label: field.label,
           max_score: normalizeMaxScore(field.max_score),
+          score_type: normalizeScoreType(field.score_type),
           score: Number(item.scores[field.id] || 0)
         }))
       }))
@@ -393,6 +436,10 @@ scoreCarousel.addEventListener('input', (event) => {
   const index = Number(slide.dataset.index);
   if (input.dataset.field === 'remark') {
     drafts[index].remark = input.value;
+  } else if (input.dataset.field === 'season') {
+    drafts[index].season = input.value;
+  } else if (input.dataset.field === 'base_price') {
+    drafts[index].base_price = input.value;
   } else {
     drafts[index].scores[input.dataset.field] = Number(input.value || 0);
     drafts[index].touched_scores[input.dataset.field] = true;

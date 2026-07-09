@@ -1133,3 +1133,62 @@ button.disabled {
   .s3-settings > label,
   .s3-settings > .switch-label { grid-column: 1 / -1; }
 }
+
+/* 2026-06: 前端评分可临时调整款式信息；评分项支持综合/独立类型 */
+.editable-style-info label {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+.editable-style-info input {
+  min-height: 42px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  font-size: 22px;
+  font-weight: 900;
+  color: #0f172a;
+  outline: none;
+}
+.editable-style-info small {
+  color: #64748b;
+  line-height: 1.6;
+}
+.independent-score-panel {
+  border-style: dashed;
+  background: #fbfdff;
+}
+.score-type-editor {
+  display: grid;
+  grid-template-columns: auto minmax(92px, 1fr);
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+.score-type-editor select {
+  min-height: 40px;
+  padding: 8px 10px;
+}
+.score-field-editor-row {
+  grid-template-columns: 36px minmax(180px, 1fr) 150px 128px auto;
+}
+.score-type-mini {
+  display: block;
+  margin-top: 3px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+@media (max-width: 720px) {
+  .score-type-editor { grid-column: 2; }
+}

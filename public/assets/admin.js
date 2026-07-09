@@ -1,4 +1,4 @@
-console.info("product-review admin version: 20260624-settings-tab-v1");
+console.info("product-review admin version: 20260624-editable-snapshot-fieldtypes-v1");
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
@@ -73,11 +73,11 @@ document.addEventListener('click', (event) => {
 }, { passive: true });
 
 const defaultScoreFields = [
-  { id: 'appearance', label: '外观设计', max_score: 10 },
-  { id: 'material', label: '材质触感', max_score: 10 },
-  { id: 'craftsmanship', label: '工艺细节', max_score: 10 },
-  { id: 'capacity', label: '容量收纳', max_score: 10 },
-  { id: 'comfort', label: '背负舒适度', max_score: 10 }
+  { id: 'appearance', label: '外观设计', max_score: 10, score_type: 'main' },
+  { id: 'material', label: '材质触感', max_score: 10, score_type: 'main' },
+  { id: 'craftsmanship', label: '工艺细节', max_score: 10, score_type: 'main' },
+  { id: 'capacity', label: '容量收纳', max_score: 10, score_type: 'main' },
+  { id: 'comfort', label: '背负舒适度', max_score: 10, score_type: 'main' }
 ];
 
 function today() { return new Date().toISOString().slice(0, 10); }
@@ -94,9 +94,22 @@ function normalizeMaxScore(value) {
   if (!Number.isFinite(n) || n <= 0) return 10;
   return Math.max(1, Math.min(100, n));
 }
+
+function normalizeScoreType(value) {
+  const raw = String(value ?? '').trim().toLowerCase();
+  if (['independent', 'standalone', 'single', 'extra', 'separate', '独立', '独立评分'].includes(raw)) return 'independent';
+  return 'main';
+}
+function isMainScoreField(field) {
+  return normalizeScoreType(field?.score_type ?? field?.type ?? field?.group ?? field?.category) !== 'independent';
+}
+function scoreTypeLabel(value) {
+  return isMainScoreField({ score_type: value }) ? '综合评分' : '独立评分';
+}
 function gradeByScore(total, maxTotal = 50) {
   const max = Number(maxTotal);
-  const rate = Number.isFinite(max) && max > 0 ? Number(total || 0) / max : 0;
+  if (!Number.isFinite(max) || max <= 0) return '不参与评级';
+  const rate = Number(total || 0) / max;
   if (rate >= 0.8) return '大单';
   if (rate >= 0.6) return '中单';
   if (rate >= 0.4) return '小单试水';
@@ -124,7 +137,7 @@ function normalizeScoreFieldsLocal(fields) {
     const base = id;
     while (used.has(id)) id = `${base}_${suffix++}`;
     used.add(id);
-    return { id, label, max_score: normalizeMaxScore(field.max_score ?? field.maxScore ?? field.max ?? field.score_max ?? 10) };
+    return { id, label, max_score: normalizeMaxScore(field.max_score ?? field.maxScore ?? field.max ?? field.score_max ?? 10), score_type: normalizeScoreType(field.score_type ?? field.type ?? field.group ?? field.category) };
   }).filter(Boolean);
   return normalized.length ? normalized : defaultScoreFields.map(item => ({ ...item }));
 }
@@ -221,6 +234,10 @@ function renderScoreFieldEditor() {
     <div class="score-field-editor-row" data-index="${index}" data-id="${escapeHtml(field.id)}">
       <span class="score-field-order">${index + 1}</span>
       <input data-score-field-label value="${escapeHtml(field.label)}" placeholder="评分项名称" />
+      <label class="score-type-editor"><span>类型</span><select data-score-field-type>
+        <option value="main" ${isMainScoreField(field) ? 'selected' : ''}>综合评分</option>
+        <option value="independent" ${!isMainScoreField(field) ? 'selected' : ''}>独立评分</option>
+      </select></label>
       <label class="score-max-editor"><span>满分</span><input data-score-field-max type="number" min="1" max="100" step="1" value="${normalizeMaxScore(field.max_score)}" /></label>
       <button class="danger-light" type="button" data-score-field-action="delete">删除</button>
     </div>
@@ -284,14 +301,15 @@ function readScoreFieldsFromEditor() {
   const fields = rows.map((row, index) => ({
     id: row.dataset.id || makeScoreFieldId(),
     label: row.querySelector('[data-score-field-label]')?.value?.trim() || '',
-    max_score: normalizeMaxScore(row.querySelector('[data-score-field-max]')?.value)
+    max_score: normalizeMaxScore(row.querySelector('[data-score-field-max]')?.value),
+    score_type: normalizeScoreType(row.querySelector('[data-score-field-type]')?.value)
   })).filter(field => field.label);
   if (!fields.length) throw new Error('至少保留 1 个评分项');
   return normalizeScoreFieldsLocal(fields);
 }
 function getScoreItems(score) {
   if (Array.isArray(score?.score_items) && score.score_items.length) return score.score_items;
-  return scoreFields.map(field => ({ id: field.id, label: field.label, max_score: normalizeMaxScore(field.max_score), score: Number(score?.[field.id] || 0) }));
+  return scoreFields.map(field => ({ id: field.id, label: field.label, max_score: normalizeMaxScore(field.max_score), score_type: normalizeScoreType(field.score_type), score: Number(score?.[field.id] || 0) }));
 }
 function getScoreSubmitTime(score) {
   return String(score?.submitted_at || score?.created_at || score?.review_date || '').trim();
@@ -322,13 +340,14 @@ function buildScoreGroups(rows) {
     .sort((a, b) => String(b.submitted_at || '').localeCompare(String(a.submitted_at || '')));
 }
 function renderScoreGroupDetail(group) {
-  const labels = [];
+  const labelMap = new Map();
   for (const score of group.scores) {
     for (const item of getScoreItems(score)) {
-      if (!labels.includes(item.label)) labels.push(item.label);
+      if (!labelMap.has(item.label)) labelMap.set(item.label, { label: item.label, score_type: normalizeScoreType(item.score_type) });
     }
   }
-  if (!labels.length) labels.push(...scoreFields.map(item => item.label));
+  if (!labelMap.size) scoreFields.forEach(item => labelMap.set(item.label, { label: item.label, score_type: normalizeScoreType(item.score_type) }));
+  const labels = Array.from(labelMap.values()).sort((a, b) => Number(!isMainScoreField(a)) - Number(!isMainScoreField(b)));
   return `
     <tr class="score-group-detail-row">
       <td colspan="3">
@@ -343,7 +362,7 @@ function renderScoreGroupDetail(group) {
             <table class="review-table detail-score-table">
               <thead><tr>
                 <th>产品图</th><th>款式编码</th><th>季节</th><th>基本售价</th>
-                ${labels.map(label => `<th>${escapeHtml(label)}</th>`).join('')}
+                ${labels.map(item => `<th>${escapeHtml(item.label)}<small class="score-type-mini">${scoreTypeLabel(item.score_type)}</small></th>`).join('')}
                 <th>总分</th><th>等级</th><th>备注</th><th class="no-print">操作</th>
               </tr></thead>
               <tbody>
@@ -358,7 +377,7 @@ function renderScoreGroupDetail(group) {
                       <td><strong>${escapeHtml(score.style_code)}</strong></td>
                       <td>${escapeHtml(score.season || '')}</td>
                       <td>${formatMoney(score.base_price)}</td>
-                      ${labels.map(label => `<td class="score-cell">${escapeHtml(values[label] ?? '')}</td>`).join('')}
+                      ${labels.map(item => `<td class="score-cell">${escapeHtml(values[item.label] ?? '')}</td>`).join('')}
                       <td class="total-cell">${escapeHtml(score.total_score)}</td>
                       <td><strong>${escapeHtml(score.grade)}</strong></td>
                       <td class="remark-cell" title="${escapeHtml(score.remark || '')}">${escapeHtml(score.remark || '')}</td>
@@ -530,7 +549,7 @@ function fillStyleForm(style) {
 
 function fillScoreEditForm(score) {
   editingScoreId = score.id;
-  const items = getScoreItems(score).map(item => ({ id: item.id, label: item.label, max_score: normalizeMaxScore(item.max_score), score: Number(item.score || 0) }));
+  const items = getScoreItems(score).map(item => ({ id: item.id, label: item.label, max_score: normalizeMaxScore(item.max_score), score_type: normalizeScoreType(item.score_type), score: Number(item.score || 0) }));
   editingScoreMeta = { style_id: score.style_id, reviewer: score.reviewer || '', review_date: score.review_date || today(), score_items: items };
   scoreEditPanel.classList.remove('hidden');
   scoreEditForm.elements.style_id.value = score.style_id || '';
@@ -540,12 +559,12 @@ function fillScoreEditForm(score) {
     <legend>评分项</legend>
     ${items.map(item => `
       <label class="score-row">
-        <span>${escapeHtml(item.label)}</span>
-        <input data-score-item-id="${escapeHtml(item.id)}" data-score-item-label="${escapeHtml(item.label)}" data-score-item-max="${normalizeMaxScore(item.max_score)}" type="range" min="0" max="${normalizeMaxScore(item.max_score)}" step="1" value="${Number(item.score || 0)}" />
+        <span>${escapeHtml(item.label)}<small class="score-type-mini">${scoreTypeLabel(item.score_type)}</small></span>
+        <input data-score-item-id="${escapeHtml(item.id)}" data-score-item-label="${escapeHtml(item.label)}" data-score-item-max="${normalizeMaxScore(item.max_score)}" data-score-item-type="${normalizeScoreType(item.score_type)}" type="range" min="0" max="${normalizeMaxScore(item.max_score)}" step="1" value="${Number(item.score || 0)}" />
         <output>${Number(item.score || 0)} / ${normalizeMaxScore(item.max_score)}</output>
       </label>
     `).join('')}
-    <div class="total-box"><span>总分</span><strong id="scoreEditTotal">0</strong><em id="scoreEditGrade">建议不下</em></div>`;
+    <div class="total-box"><span>综合总分</span><strong id="scoreEditTotal">0</strong><em id="scoreEditGrade">建议不下</em></div>`;
   updateScoreEditTotal();
   scoreEditPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -553,6 +572,7 @@ function updateScoreEditTotal() {
   let total = 0;
   let maxTotal = 0;
   scoreEditForm.querySelectorAll('[data-score-item-id]').forEach(input => {
+    if (normalizeScoreType(input.dataset.scoreItemType) === 'independent') return;
     total += Number(input.value || 0);
     maxTotal += normalizeMaxScore(input.dataset.scoreItemMax || input.max);
   });
@@ -844,6 +864,7 @@ scoreEditForm.addEventListener('submit', async (event) => {
       id: input.dataset.scoreItemId,
       label: input.dataset.scoreItemLabel,
       max_score: normalizeMaxScore(input.dataset.scoreItemMax || input.max),
+      score_type: normalizeScoreType(input.dataset.scoreItemType),
       score: Number(input.value || 0)
     }));
     const payload = {
