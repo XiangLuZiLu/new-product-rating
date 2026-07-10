@@ -1,10 +1,97 @@
-const encoder = new TextEncoder();
 
-function json(data, status = 200) {
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+const B64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+function json(data, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { 'content-type': 'application/json; charset=utf-8' }
+    headers: { 'content-type': 'application/json; charset=utf-8', ...extraHeaders }
   });
+}
+
+function bytesFromInput(input) {
+  return typeof input === 'string' ? encoder.encode(input) : input;
+}
+
+function base64UrlEncode(input) {
+  const bytes = bytesFromInput(input);
+  let out = '';
+  for (let i = 0; i < bytes.length; i += 3) {
+    const a = bytes[i];
+    const b = i + 1 < bytes.length ? bytes[i + 1] : 0;
+    const c = i + 2 < bytes.length ? bytes[i + 2] : 0;
+    const n = (a << 16) | (b << 8) | c;
+    out += B64_CHARS[(n >> 18) & 63];
+    out += B64_CHARS[(n >> 12) & 63];
+    out += i + 1 < bytes.length ? B64_CHARS[(n >> 6) & 63] : '=';
+    out += i + 2 < bytes.length ? B64_CHARS[n & 63] : '=';
+  }
+  return out.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function base64UrlDecodeToBytes(input) {
+  let s = String(input || '').replace(/-/g, '+').replace(/_/g, '/');
+  while (s.length % 4) s += '=';
+  const clean = s.replace(/[^A-Za-z0-9+/=]/g, '');
+  const bytes = [];
+  for (let i = 0; i < clean.length; i += 4) {
+    const c1 = B64_CHARS.indexOf(clean[i]);
+    const c2 = B64_CHARS.indexOf(clean[i + 1]);
+    const c3 = clean[i + 2] === '=' ? -1 : B64_CHARS.indexOf(clean[i + 2]);
+    const c4 = clean[i + 3] === '=' ? -1 : B64_CHARS.indexOf(clean[i + 3]);
+    if (c1 < 0 || c2 < 0) continue;
+    const n = (c1 << 18) | (c2 << 12) | ((c3 < 0 ? 0 : c3) << 6) | (c4 < 0 ? 0 : c4);
+    bytes.push((n >> 16) & 255);
+    if (c3 >= 0) bytes.push((n >> 8) & 255);
+    if (c4 >= 0) bytes.push(n & 255);
+  }
+  return new Uint8Array(bytes);
+}
+
+function base64UrlDecode(input) {
+  return decoder.decode(base64UrlDecodeToBytes(input));
+}
+
+function fallbackSignature(data, secret) {
+  // 兜底给不支持 WebCrypto/btoa/atob 的边缘运行时使用；Cloudflare 仍优先使用 HMAC-SHA256。
+  const text = `${secret}|${data}|${secret}`;
+  let h1 = 0x811c9dc5;
+  let h2 = 0x9e3779b9;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text.charCodeAt(i);
+    h1 ^= ch;
+    h1 = Math.imul(h1, 0x01000193) >>> 0;
+    h2 ^= ch + i;
+    h2 = Math.imul(h2, 0x85ebca6b) >>> 0;
+  }
+  return `fb.${h1.toString(16).padStart(8, '0')}${h2.toString(16).padStart(8, '0')}`;
+}
+
+async function hmac(data, secret) {
+  try {
+    if (globalThis.crypto && globalThis.crypto.subtle) {
+      const key = await globalThis.crypto.subtle.importKey(
+        'raw',
+        encoder.encode(secret),
+        { name: 'HMAC', hash: 'SHA-256' },
+        false,
+        ['sign']
+      );
+      const signature = await globalThis.crypto.subtle.sign('HMAC', key, encoder.encode(data));
+      return base64UrlEncode(new Uint8Array(signature));
+    }
+  } catch {}
+  return fallbackSignature(data, secret);
+}
+
+function safeEqual(a, b) {
+  const left = String(a ?? '');
+  const right = String(b ?? '');
+  if (!left || !right || left.length !== right.length) return false;
+  let result = 0;
+  for (let i = 0; i < left.length; i++) result |= left.charCodeAt(i) ^ right.charCodeAt(i);
+  return result === 0;
 }
 
 function getCookie(request, name) {
@@ -14,38 +101,6 @@ function getCookie(request, name) {
     .map(v => v.trim())
     .find(v => v.startsWith(name + '='))
     ?.slice(name.length + 1);
-}
-
-function base64UrlEncode(input) {
-  const bytes = typeof input === 'string' ? encoder.encode(input) : input;
-  let binary = '';
-  for (const b of bytes) binary += String.fromCharCode(b);
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
-}
-
-function base64UrlDecode(input) {
-  let s = input.replace(/-/g, '+').replace(/_/g, '/');
-  while (s.length % 4) s += '=';
-  return atob(s);
-}
-
-async function hmac(data, secret) {
-  const key = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  );
-  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(data));
-  return base64UrlEncode(new Uint8Array(signature));
-}
-
-function safeEqual(a, b) {
-  if (!a || !b || a.length !== b.length) return false;
-  let result = 0;
-  for (let i = 0; i < a.length; i++) result |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return result === 0;
 }
 
 function getSessionIdleSeconds(env) {
@@ -95,7 +150,12 @@ export async function onRequest(context) {
   if (request.method === 'OPTIONS') return next();
   if (url.pathname === '/api/login' || url.pathname === '/api/logout' || url.pathname.startsWith('/api/public/')) return next();
 
-  const session = await verifySession(request, env);
+  let session = null;
+  try {
+    session = await verifySession(request, env);
+  } catch {
+    session = null;
+  }
   if (!session) return json({ ok: false, message: '未登录或登录已过期' }, 401);
 
   const response = await next();

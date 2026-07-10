@@ -16,7 +16,7 @@ function adminHtml(adminPath, sessionIdleMinutes) {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>新品评审后台</title>
-  <link rel="stylesheet" href="/assets/style.css?v=20260624-score-systems-v1" />
+  <link rel="stylesheet" href="/assets/style.css?v=20260710-aliyun-login-runtime-fix-v1" />
 </head>
 <body>
   <div class="page-bg"></div>
@@ -29,6 +29,7 @@ function adminHtml(adminPath, sessionIdleMinutes) {
           <p>后台只负责配置需要评分的款式、产品图和评分项。</p>
         </div>
       </div>
+      <div id="loginMessage" class="message hidden"></div>
       <form id="loginForm" class="login-form">
         <label>管理账号<input type="text" name="username" placeholder="请输入后台管理账号" autocomplete="username" required /></label>
         <label>管理密码<input type="password" name="password" placeholder="请输入后台管理密码" autocomplete="current-password" required /></label>
@@ -213,7 +214,7 @@ function adminHtml(adminPath, sessionIdleMinutes) {
     </section>
   </main>
   <script>window.__ADMIN_PATH__ = ${JSON.stringify(adminPath)}; window.__SESSION_IDLE_MINUTES__ = ${JSON.stringify(sessionIdleMinutes)};</script>
-  <script src="/assets/admin.js?v=20260624-score-systems-v1" defer></script>
+  <script src="/assets/admin.js?v=20260710-aliyun-login-runtime-fix-v1" defer></script>
 </body>
 </html>`;
 }

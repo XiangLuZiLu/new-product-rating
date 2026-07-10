@@ -1,10 +1,11 @@
-console.info("product-review admin version: 20260624-score-systems-v1");
+console.info("product-review admin version: 20260710-aliyun-login-message-v1");
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
 const loginView = $('#loginView');
 const appView = $('#appView');
 const loginForm = $('#loginForm');
+const loginMessage = $('#loginMessage');
 const logoutBtn = $('#logoutBtn');
 const messageBox = $('#message');
 const styleForm = $('#styleForm');
@@ -185,11 +186,16 @@ function formatMoney(value) {
   return Number(value).toLocaleString('zh-CN', { maximumFractionDigits: 2 });
 }
 function showMessage(text, type = 'success') {
-  messageBox.textContent = text;
-  messageBox.classList.toggle('error', type === 'error');
-  messageBox.classList.remove('hidden');
+  const target = (loginView && !loginView.classList.contains('hidden') && loginMessage) ? loginMessage : messageBox;
+  if (!target) {
+    if (type === 'error') window.alert(text);
+    return;
+  }
+  target.textContent = text;
+  target.classList.toggle('error', type === 'error');
+  target.classList.remove('hidden');
   window.clearTimeout(showMessage.timer);
-  showMessage.timer = window.setTimeout(() => messageBox.classList.add('hidden'), 3600);
+  showMessage.timer = window.setTimeout(() => target.classList.add('hidden'), 6000);
 }
 function normalizeScoreFieldsLocal(fields) {
   if (!Array.isArray(fields)) return defaultScoreFields.map(item => ({ ...item }));
