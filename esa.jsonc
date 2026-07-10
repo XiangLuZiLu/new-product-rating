@@ -2,7 +2,7 @@
   "name": "new-product-rating",
   "entry": "./aliyun/entry.js",
   "installCommand": "",
-  "buildCommand": "",
+  "buildCommand": "npm run build",
   "assets": {
     "directory": "./public"
   }

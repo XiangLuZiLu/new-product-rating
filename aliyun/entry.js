@@ -15,6 +15,7 @@ import * as scoresIndex from '../functions/api/scores/index.js';
 import * as scoreItem from '../functions/api/scores/[id].js';
 import * as scoreHistory from '../functions/api/scores/[id]/history.js';
 import * as catchAll from '../functions/[[path]].js';
+import GENERATED_ENV from './env.generated.js';
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -33,7 +34,7 @@ function getProcessEnv() {
 function buildEnv(env = {}, request = null) {
   // 阿里云 ESA Pages 的环境变量可能来自 process.env，也可能作为 fetch 的第二个参数传入。
   // 为避免变量未注入时误判成 Cloudflare D1，这里对阿里云默认域名做安全兜底。
-  const merged = { ...getProcessEnv(), ...(env || {}) };
+  const merged = { ...(GENERATED_ENV || {}), ...getProcessEnv(), ...(env || {}) };
   let host = '';
   try { host = new URL(request?.url || 'https://local/').hostname; } catch {}
   const looksAliyun = /aliyun-esa\.net$/i.test(host) || /alibaba|aliyun/i.test(String(merged.ESA_PROVIDER || merged.PAGES_PROVIDER || ''));
