@@ -1,6 +1,6 @@
 function normalizeAdminPath(value) {
-  const raw = String(value || 'review-admin-2026').trim().replace(/^\/+|\/+$/g, '');
-  return '/' + (raw || 'review-admin-2026');
+  const raw = String(value || 'admin').trim().replace(/^\/+|\/+$/g, '');
+  return '/' + (raw || 'admin');
 }
 
 function getSessionIdleMinutes(env) {

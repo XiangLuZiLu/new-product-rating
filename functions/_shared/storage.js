@@ -205,8 +205,13 @@ function newSubmissionId() {
     : `submission_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 }
 
-function normalizeDriver(env) {
-  return String(env.STORAGE_DRIVER || env.DATA_DRIVER || 'd1').trim().toLowerCase();
+function normalizeDriver(env = {}) {
+  const configured = String(env.STORAGE_DRIVER || env.DATA_DRIVER || '').trim().toLowerCase();
+  if (configured) return configured;
+  // Cloudflare 有 DB 绑定时默认走 D1；阿里云 ESA 运行时通常提供 EdgeKV 全局类。
+  if (env.DB) return 'd1';
+  if (typeof globalThis.EdgeKV === 'function' || typeof env.EdgeKV === 'function') return 'edgekv';
+  return 'd1';
 }
 
 function makeFieldId(value, index) {

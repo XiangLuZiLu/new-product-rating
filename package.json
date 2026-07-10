@@ -6,7 +6,8 @@
     "dev": "wrangler pages dev public --compatibility-date=2026-06-24",
     "dev:d1": "wrangler pages dev public --compatibility-date=2026-06-24 --d1=DB",
     "deploy": "wrangler pages deploy public --project-name=product-review-pages",
-    "check:zip": "node -e \"console.log('static project')\""
+    "check:zip": "node -e \"console.log('static project')\"",
+    "build": "echo no build needed"
   },
   "devDependencies": {
     "wrangler": "latest"

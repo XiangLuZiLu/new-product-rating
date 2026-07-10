@@ -30,10 +30,19 @@ function getProcessEnv() {
   return {};
 }
 
-function buildEnv(env = {}) {
-  // 阿里云 ESA 的示例入口是 fetch(request)，部分环境变量通过 process.env 注入。
-  // 这里同时兼容 fetch(request, env) 与 process.env 两种形式。
-  return { ...getProcessEnv(), ...(env || {}) };
+function buildEnv(env = {}, request = null) {
+  // 阿里云 ESA Pages 的环境变量可能来自 process.env，也可能作为 fetch 的第二个参数传入。
+  // 为避免变量未注入时误判成 Cloudflare D1，这里对阿里云默认域名做安全兜底。
+  const merged = { ...getProcessEnv(), ...(env || {}) };
+  let host = '';
+  try { host = new URL(request?.url || 'https://local/').hostname; } catch {}
+  const looksAliyun = /aliyun-esa\.net$/i.test(host) || /alibaba|aliyun/i.test(String(merged.ESA_PROVIDER || merged.PAGES_PROVIDER || ''));
+  if (looksAliyun) {
+    if (!merged.STORAGE_DRIVER && !merged.DATA_DRIVER) merged.STORAGE_DRIVER = 'edgekv';
+    if (!merged.EDGEKV_NAMESPACE && !merged.ALIYUN_EDGEKV_NAMESPACE && !merged.KV_NAMESPACE) merged.EDGEKV_NAMESPACE = 'product_review';
+    if (!merged.ADMIN_PATH) merged.ADMIN_PATH = 'admin';
+  }
+  return merged;
 }
 
 function methodHandler(mod, method) {
@@ -49,8 +58,15 @@ async function callModule(mod, request, env, params = {}) {
 }
 
 function normalizeAdminPath(value) {
-  const raw = String(value || 'review-admin-2026').trim().replace(/^\/+|\/+$/g, '');
-  return '/' + (raw || 'review-admin-2026');
+  const raw = String(value || 'admin').trim().replace(/^\/+|\/+$/g, '');
+  return '/' + (raw || 'admin');
+}
+
+function isAdminPath(path, env) {
+  const normalized = path.replace(/\/+$/, '') || '/';
+  const configured = normalizeAdminPath(env.ADMIN_PATH);
+  // 兼容旧版 review-admin-2026 和新版默认 admin，防止阿里云环境变量未注入时后台入口 404。
+  return normalized === configured || normalized === '/admin' || normalized === '/review-admin-2026';
 }
 
 async function handleApi(request, env) {
@@ -85,12 +101,12 @@ async function handleApi(request, env) {
 }
 
 async function handleRequest(request, rawEnv = {}) {
-  const env = buildEnv(rawEnv);
+  const env = buildEnv(rawEnv, request);
   const url = new URL(request.url);
   if (url.pathname.startsWith('/api/')) return handleApi(request, env);
 
   // 静态资源由 ESA Pages assets 处理；只有后台自定义入口这类未命中静态资源的请求会进入函数。
-  if (url.pathname === normalizeAdminPath(env.ADMIN_PATH)) {
+  if (isAdminPath(url.pathname, env)) {
     return catchAll.onRequest({ request, env, params: { path: url.pathname.slice(1) } });
   }
 
