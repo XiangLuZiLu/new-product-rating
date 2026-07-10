@@ -95,7 +95,7 @@ function safeEqual(a, b) {
 }
 
 function getAdminUsername(env) {
-  return String(env.ADMIN_USERNAME || 'admin');
+  return String(env.ADMIN_USERNAME || 'admin').trim();
 }
 
 function getSessionIdleSeconds(env) {
@@ -130,11 +130,12 @@ export async function onRequestPost({ request, env }) {
     }
 
     const expectedUsername = getAdminUsername(env);
+    const expectedPassword = String(env.ADMIN_PASSWORD || '').trim();
     const inputUsername = String(body.username || '').trim();
-    const inputPassword = String(body.password || '');
+    const inputPassword = String(body.password || '').trim();
 
-    if (!safeEqual(inputUsername, expectedUsername) || !safeEqual(inputPassword, String(env.ADMIN_PASSWORD))) {
-      return json({ ok: false, message: '账号或密码错误' }, 401);
+    if (!safeEqual(inputUsername, expectedUsername) || !safeEqual(inputPassword, expectedPassword)) {
+      return json({ ok: false, message: '账号或密码错误，请检查阿里云环境变量 ADMIN_USERNAME / ADMIN_PASSWORD 是否和输入完全一致' }, 401);
     }
 
     const { token, maxAge } = await createToken(env, expectedUsername);

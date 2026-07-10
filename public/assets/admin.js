@@ -271,11 +271,12 @@ function resetSessionIdleTimer(shouldRefresh) {
 }
 async function requestJson(path, options = {}) {
   const response = await fetch(path, { credentials: 'include', ...options, headers: options.headers || {} });
-  if (response.status === 401) {
-    showLogin();
-    throw new Error('请先登录');
-  }
   const data = await response.json().catch(() => null);
+  if (response.status === 401) {
+    // 登录接口 401 代表账号/密码不匹配；其他接口 401 才代表需要重新登录。
+    if (path !== '/api/login') showLogin();
+    throw new Error(data?.message || (path === '/api/login' ? '账号或密码错误' : '请先登录'));
+  }
   if (!response.ok || data?.ok === false) throw new Error(data?.message || '请求失败');
   return data;
 }
