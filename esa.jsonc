@@ -1,0 +1,9 @@
+{
+  "name": "new-product-rating",
+  "entry": "./aliyun/entry.js",
+  "installCommand": "",
+  "buildCommand": "",
+  "assets": {
+    "directory": "./public"
+  }
+}

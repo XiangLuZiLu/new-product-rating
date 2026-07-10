@@ -331,6 +331,7 @@ function safeCount(value, fallback = 3) {
 export function getStorage(env) {
   const driver = normalizeDriver(env);
   if (['http', 'external', 'api', 'custom'].includes(driver)) return createHttpStorage(env);
+  if (['edgekv', 'aliyun-kv', 'aliyun-edgekv', 'esa-kv'].includes(driver)) return createAliyunEdgeKVStorage(env);
   if (['kv', 'cloudflare-kv', 'workers-kv'].includes(driver)) return createKVStorage(env);
   return createD1Storage(env);
 }
@@ -821,6 +822,34 @@ function createKVStorage(env) {
     async getImageSettings() { const s = await getSettings(); return normalizeImageSettings(s.image_storage_settings || {}, imageSettingsFromEnv(env)); },
     async setImageSettings(settings) { const s = await getSettings(); const current = normalizeImageSettings(s.image_storage_settings || {}, imageSettingsFromEnv(env)); s.image_storage_settings = normalizeImageSettings(settings, current); await setSettings(s); return s.image_storage_settings; }
   };
+}
+
+
+function createAliyunEdgeKVStorage(env) {
+  const EdgeKVClass = globalThis.EdgeKV || env.EdgeKV;
+  if (typeof EdgeKVClass !== 'function') {
+    throw new Error('当前使用阿里云 EdgeKV 存储，但运行环境未提供 EdgeKV。请确认部署在阿里云 ESA Functions/Pages，并已开通 KV 存储。');
+  }
+  const namespace = String(env.EDGEKV_NAMESPACE || env.ALIYUN_EDGEKV_NAMESPACE || env.KV_NAMESPACE || 'product_review').trim();
+  if (!namespace) throw new Error('当前使用阿里云 EdgeKV 存储，但未配置 EDGEKV_NAMESPACE。');
+  const edgeKV = new EdgeKVClass({ namespace });
+  const cleanKey = (key) => String(key || '')
+    .replace(/[^a-zA-Z0-9_-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 512) || 'empty_key';
+  const kvAdapter = {
+    async get(key, options = {}) {
+      const type = options?.type || 'text';
+      return edgeKV.get(cleanKey(key), { type });
+    },
+    async put(key, value) {
+      return edgeKV.put(cleanKey(key), String(value));
+    },
+    async delete(key) {
+      return edgeKV.delete(cleanKey(key));
+    }
+  };
+  return createKVStorage({ ...env, KV: kvAdapter, KV_PREFIX: env.KV_PREFIX || 'product-review_' });
 }
 
 function createHttpStorage(env) {
