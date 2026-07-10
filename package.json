@@ -1,13 +1,13 @@
 {
   "name": "product-review-pages",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "private": true,
   "scripts": {
     "dev": "wrangler pages dev public --compatibility-date=2026-06-24",
     "dev:d1": "wrangler pages dev public --compatibility-date=2026-06-24 --d1=DB",
     "deploy": "wrangler pages deploy public --project-name=product-review-pages",
     "check:zip": "node -e \"console.log('static project')\"",
-    "build": "node scripts_build_env.js"
+    "build": "node scripts_build_env.cjs"
   },
   "devDependencies": {
     "wrangler": "latest"
