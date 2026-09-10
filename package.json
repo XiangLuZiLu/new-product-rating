@@ -1,0 +1,15 @@
+{
+  "name": "product-review-pages",
+  "version": "2.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler pages dev public --compatibility-date=2026-06-24",
+    "dev:d1": "wrangler pages dev public --compatibility-date=2026-06-24 --d1=DB",
+    "check:zip": "node -e \"console.log('static project')\"",
+    "build": "echo no build needed"
+  },
+  "devDependencies": {
+    "wrangler": "latest"
+  },
+  "type": "module"
+}

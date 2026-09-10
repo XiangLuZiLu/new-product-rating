@@ -1,0 +1,30 @@
+
+.image-preview-mask{
+ position:fixed;
+ inset:0;
+ background:rgba(0,0,0,.75);
+ display:none;
+ align-items:center;
+ justify-content:center;
+ z-index:999999;
+ padding:20px;
+}
+.image-preview-mask.show{display:flex;}
+.image-preview-image{
+ max-width:90vw;
+ max-height:88vh;
+ object-fit:contain;
+ cursor:zoom-in;
+ transition:.25s;
+}
+.image-preview-image.zoom{
+ max-width:98vw;
+ max-height:96vh;
+ cursor:zoom-out;
+}
+@media(max-width:600px){
+ .image-preview-image{
+  max-width:96vw;
+  max-height:82vh;
+ }
+}

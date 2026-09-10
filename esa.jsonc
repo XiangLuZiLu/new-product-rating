@@ -1,0 +1,9 @@
+{
+  "name": "new-product-rating",
+  "entry": "./esa-functions/index.js",
+  "installCommand": "",
+  "buildCommand": "",
+  "assets": {
+    "directory": "./public"
+  }
+}
