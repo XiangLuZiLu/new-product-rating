@@ -1,4 +1,5 @@
 import { getStorage, normalizeScorePayload } from '../../_shared/storage.js';
+import { readKvWithPropagationRetry } from '../../_shared/kvConsistency.js';
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8' } });
@@ -57,9 +58,15 @@ export async function onRequestPost({ request, env }) {
     }
     if (reviewLinkCode) {
       if (typeof storage.getReviewLink !== 'function') return json({ ok: false, message: '当前存储暂不支持评分链接' }, 400);
-      const link = await storage.getReviewLink(reviewLinkCode);
+      const linkRead = await readKvWithPropagationRetry(() => storage.getReviewLink(reviewLinkCode), env);
+      const link = linkRead.value;
       if (!link || link.deleted_at || Number(link.active ?? 1) !== 1) {
-        return json({ ok: false, code: 'LINK_NOT_FOUND', message: '该评分链接不存在或已被删除，请联系管理员重新生成。' }, 404);
+        return json({
+          ok: false,
+          code: 'LINK_NOT_FOUND',
+          message: '评分链接暂时无法读取。如果链接刚生成，可能正在同步到当前 ESA 节点，请稍后重新提交。',
+          kv_retry_attempts: linkRead.attempts
+        }, 404);
       }
       if (linkExpired(link)) {
         return json({ ok: false, code: 'LINK_EXPIRED', message: '评分链接已过期，无法提交。' }, 410);

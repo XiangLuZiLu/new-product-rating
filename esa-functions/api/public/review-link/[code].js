@@ -1,7 +1,15 @@
 import { getStorage, imageSettingsFromEnv, normalizeImageSettings } from '../../../_shared/storage.js';
+import { readKvWithPropagationRetry } from '../../../_shared/kvConsistency.js';
 
-function json(data, status = 200) {
-  return new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
+function json(data, status = 200, extraHeaders = {}) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'no-store',
+      ...extraHeaders
+    }
+  });
 }
 
 function nowBeijing() {
@@ -17,9 +25,15 @@ export async function onRequestGet({ params, env }) {
   try {
     const storage = getStorage(env);
     if (typeof storage.getReviewLink !== 'function') throw new Error('当前存储暂不支持评分链接');
-    const link = await storage.getReviewLink(params.code);
+    const linkRead = await readKvWithPropagationRetry(() => storage.getReviewLink(params.code), env);
+    const link = linkRead.value;
     if (!link || link.deleted_at || Number(link.active ?? 1) !== 1) {
-      return json({ ok: false, code: 'LINK_NOT_FOUND', message: '该评分链接不存在或已被删除，请联系管理员重新生成。' }, 404);
+      return json({
+        ok: false,
+        code: 'LINK_NOT_FOUND',
+        message: '该评分链接暂时无法读取。如果是刚生成的链接，可能正在同步到当前 ESA 节点，请稍后重试；等待后仍失败再联系管理员。',
+        kv_retry_attempts: linkRead.attempts
+      }, 404, { 'retry-after': '3' });
     }
     if (isExpired(link)) {
       return json({ ok: false, code: 'LINK_EXPIRED', message: '该评分链接已过期，请联系管理员重新生成。' }, 410);
