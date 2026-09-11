@@ -1081,10 +1081,23 @@ function createKVStorage(env) {
   }
   async function deleteKey(k) {
     if (typeof kv.delete === 'function') {
-      await kv.delete(k);
-    } else {
-      await putJson(k, { deleted: true, updated_at: now() }, { expirationTtl: 60 });
+      const result = await kv.delete(k);
+      // ESA EdgeKV.delete() returns true on success and false on failure.
+      // Other KV-compatible runtimes may resolve undefined, so only treat an
+      // explicit false as a possible failure. If the key is already absent,
+      // deletion is idempotently considered successful.
+      if (result === false) {
+        const remaining = await kv.get(k, { type: 'text' });
+        if (remaining !== undefined && remaining !== null) {
+          const error = new Error('删除 KV 数据失败，请稍后重试');
+          error.status = 503;
+          throw error;
+        }
+      }
+      return true;
     }
+    await putJson(k, { deleted: true, updated_at: now() }, { expirationTtl: 60 });
+    return true;
   }
   async function getIndex(name) {
     const value = await getJson(key(`${name}:index`), []);
@@ -1349,7 +1362,16 @@ function createKVStorage(env) {
     async setScoreFields(fields) { const s = await getSettings(); s.score_fields = normalizeScoreFields(fields, normalizeScoreTypes(s.score_types || DEFAULT_SCORE_TYPES)); await setSettings(s); return s.score_fields; },
     async listReviewLinks() {
       const ids = await getIndex('review-links');
-      const rows = (await Promise.all(ids.map(id => getJson(keyReviewLink(id), null)))).filter(row => row && !row.deleted_at);
+      const loaded = await Promise.all(ids.map(async id => ({ id, row: await getJson(keyReviewLink(id), null) })));
+
+      // Compatibility cleanup for links deleted by older ESA code. Older
+      // versions performed a soft delete and left the physical KV key behind.
+      // Once a tombstone is observed, remove that per-link key for real.
+      await Promise.all(loaded
+        .filter(item => item.row && item.row.deleted_at)
+        .map(item => deleteKey(keyReviewLink(item.id)).catch(() => false)));
+
+      const rows = loaded.map(item => item.row).filter(row => row && !row.deleted_at);
       return rows.map(attachReviewLinkStatus).sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
     },
     async getReviewLink(code) {
@@ -1386,9 +1408,14 @@ function createKVStorage(env) {
     },
     async deleteReviewLink(code) {
       const cleanCode = normalizeReviewLinkCode(code);
-      const old = await this.getReviewLink(cleanCode);
-      if (!old) { const error = new Error('评分链接不存在'); error.status = 404; throw error; }
-      await putJson(keyReviewLink(cleanCode), { ...old, active: 0, deleted_at: now(), updated_at: now() });
+      if (!cleanCode) { const error = new Error('评分链接不存在'); error.status = 404; throw error; }
+
+      // ESA version uses a hard delete. Do not rewrite the global review-links
+      // index here: EdgeKV is eventually consistent, and a stale POP could
+      // otherwise overwrite a newer index and accidentally hide newly-created
+      // links. A stale code in the index is harmless because listReviewLinks()
+      // ignores entries whose per-link key no longer exists.
+      await deleteKey(keyReviewLink(cleanCode));
       return true;
     },
     async getPublicDraft(reviewer, linkCode = '') {
