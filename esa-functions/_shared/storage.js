@@ -1103,7 +1103,76 @@ function createKVStorage(env) {
     const value = await getJson(key(`${name}:index`), []);
     return Array.isArray(value) ? value : [];
   }
-  async function setIndex(name, ids) { await putJson(key(`${name}:index`), Array.from(new Set(ids.map(String)))); }
+  async function setIndex(name, ids) {
+    await putJson(key(`${name}:index`), Array.from(new Set(ids.map(String).filter(Boolean))));
+  }
+
+  const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+  const indexUpdateLocks = new Map();
+  const indexSnapshotCache = new Map();
+
+  async function queueIndexUpdate(name, task) {
+    const previous = indexUpdateLocks.get(name) || Promise.resolve();
+    const current = previous.catch(() => undefined).then(task);
+    indexUpdateLocks.set(name, current);
+    try {
+      return await current;
+    } finally {
+      if (indexUpdateLocks.get(name) === current) indexUpdateLocks.delete(name);
+    }
+  }
+
+  // EdgeKV is eventually consistent across POPs. For the two admin-managed
+  // indexes below, merge several short-interval snapshots before the first
+  // write in a request. Subsequent index mutations in the same request reuse
+  // the just-written local snapshot and are serialized, so batch deletion
+  // cannot re-add IDs removed by another concurrent Promise in that request.
+  async function mergeIndexSnapshots(name) {
+    const cached = indexSnapshotCache.get(name);
+    if (cached && Date.now() - cached.at < 5000) return [...cached.ids];
+
+    const merged = new Set();
+    const collect = async () => {
+      const ids = await getIndex(name);
+      ids.forEach(id => {
+        const value = String(id || '').trim();
+        if (value) merged.add(value);
+      });
+    };
+    await collect();
+    await wait(120);
+    await collect();
+    await wait(280);
+    await collect();
+    const result = Array.from(merged);
+    indexSnapshotCache.set(name, { ids: result, at: Date.now() });
+    return result;
+  }
+
+  async function addIndexIdSafely(name, id) {
+    const target = String(id || '').trim();
+    if (!target) return;
+    return queueIndexUpdate(name, async () => {
+      const ids = await mergeIndexSnapshots(name);
+      if (!ids.includes(target)) ids.push(target);
+      await setIndex(name, ids);
+      indexSnapshotCache.set(name, { ids: [...ids], at: Date.now() });
+    });
+  }
+
+  async function removeIndexIdSafely(name, id) {
+    const target = String(id || '').trim();
+    if (!target) return;
+    return queueIndexUpdate(name, async () => {
+      const ids = await mergeIndexSnapshots(name);
+      const next = ids.filter(item => String(item) !== target);
+      // Write even if the local snapshot did not contain target. This keeps
+      // deletion idempotent and publishes a clean index value from this POP.
+      await setIndex(name, next);
+      indexSnapshotCache.set(name, { ids: [...next], at: Date.now() });
+    });
+  }
+
   async function getSettings() { return getJson(key('settings'), {}); }
   async function setSettings(settings) { await putJson(key('settings'), settings); }
   async function getScoreTypesSetting() { const s = await getSettings(); return normalizeScoreTypes(s.score_types || DEFAULT_SCORE_TYPES); }
@@ -1177,8 +1246,7 @@ function createKVStorage(env) {
       const id = crypto.randomUUID();
       const row = { id, ...data, created_at: now(), updated_at: now(), deleted_at: null };
       await putJson(keyStyle(id), row);
-      const ids = await getIndex('styles');
-      await setIndex('styles', [...ids, id]);
+      await addIndexIdSafely('styles', id);
       return row;
     },
     async updateStyle(id, data) {
@@ -1195,11 +1263,11 @@ function createKVStorage(env) {
       const old = await getStyleById(cleanId);
       if (!old) throw new Error('款式不存在');
 
-      // ESA uses a real KV delete for configured styles. Do not rewrite the
-      // global styles index here: a request landing on a stale POP could read
-      // an older index and overwrite IDs of newly-created styles. A stale ID
-      // in styles:index is harmless because listStyles() ignores missing keys.
+      // Hard-delete both the style record and its index membership. Index
+      // updates merge several snapshots first to reduce stale-POP overwrite
+      // risk while keeping product_review_styles_index clean.
       await deleteKey(keyStyle(cleanId));
+      await removeIndexIdSafely('styles', cleanId);
       return true;
     },
     async createScore(data) {
@@ -1412,8 +1480,7 @@ function createKVStorage(env) {
       if (!code) throw new Error('生成评分链接失败，请重试');
       const row = { code, ...data, created_at: now(), updated_at: now(), deleted_at: null };
       await putJson(keyReviewLink(code), row);
-      const ids = await getIndex('review-links');
-      await setIndex('review-links', [...ids, code]);
+      await addIndexIdSafely('review-links', code);
       return attachReviewLinkStatus(row);
     },
     async updateReviewLink(code, payload) {
@@ -1430,12 +1497,11 @@ function createKVStorage(env) {
       const cleanCode = normalizeReviewLinkCode(code);
       if (!cleanCode) { const error = new Error('评分链接不存在'); error.status = 404; throw error; }
 
-      // ESA version uses a hard delete. Do not rewrite the global review-links
-      // index here: EdgeKV is eventually consistent, and a stale POP could
-      // otherwise overwrite a newer index and accidentally hide newly-created
-      // links. A stale code in the index is harmless because listReviewLinks()
-      // ignores entries whose per-link key no longer exists.
+      // Hard-delete both the link record and its index membership. Index
+      // updates merge several snapshots first to reduce stale-POP overwrite
+      // risk while keeping product_review_review_links_index clean.
       await deleteKey(keyReviewLink(cleanCode));
+      await removeIndexIdSafely('review-links', cleanCode);
       return true;
     },
     async getPublicDraft(reviewer, linkCode = '') {
