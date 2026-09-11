@@ -1155,7 +1155,19 @@ function createKVStorage(env) {
     async listStyles(filters = {}) {
       const ids = await getIndex('styles');
       const keyword = String(filters.search || '').trim().toLowerCase();
-      const rows = (await Promise.all(ids.map(getStyleById))).filter(row => row && !row.deleted_at);
+      const loaded = await Promise.all(ids.map(async id => ({ id, row: await getStyleById(id) })));
+
+      // Compatibility cleanup for styles deleted by older ESA code. Older
+      // versions only wrote deleted_at and left product_review_style_<id>
+      // behind. Once such a tombstone is observed, remove that physical KV
+      // key for real. Keep the global styles index untouched because EdgeKV
+      // is eventually consistent and rewriting a stale index from one POP
+      // could hide styles created on another POP.
+      await Promise.all(loaded
+        .filter(item => item.row && item.row.deleted_at)
+        .map(item => deleteKey(keyStyle(item.id)).catch(() => false)));
+
+      const rows = loaded.map(item => item.row).filter(row => row && !row.deleted_at);
       return rows
         .filter(row => !filters.activeOnly || Number(row.active ?? 1) === 1)
         .filter(row => !keyword || [row.style_code, row.season, row.style_remark].some(v => String(v || '').toLowerCase().includes(keyword)))
@@ -1177,9 +1189,17 @@ function createKVStorage(env) {
       return row;
     },
     async deleteStyle(id) {
-      const old = await getStyleById(id);
-      if (!old || old.deleted_at) throw new Error('款式不存在');
-      await putJson(keyStyle(String(id)), { ...old, active: 0, deleted_at: now(), updated_at: now() });
+      const cleanId = String(id || '').trim();
+      if (!cleanId) throw new Error('款式不存在');
+
+      const old = await getStyleById(cleanId);
+      if (!old) throw new Error('款式不存在');
+
+      // ESA uses a real KV delete for configured styles. Do not rewrite the
+      // global styles index here: a request landing on a stale POP could read
+      // an older index and overwrite IDs of newly-created styles. A stale ID
+      // in styles:index is harmless because listStyles() ignores missing keys.
+      await deleteKey(keyStyle(cleanId));
       return true;
     },
     async createScore(data) {
