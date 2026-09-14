@@ -1466,20 +1466,33 @@ function createKVStorage(env) {
       return row && !row.deleted_at ? attachReviewLinkStatus(row) : null;
     },
     async createReviewLink(payload) {
-      // Generating a link only needs to validate that the selected style IDs
-      // are present in the styles index. Loading every style record here can
-      // easily exceed ESA EdgeKV's per-execution fetch-call limit.
-      const styleIds = await getIndex('styles');
-      const availableStyles = styleIds.map(id => ({ id: String(id) }));
+      // ESA EdgeKV has a very small per-execution call budget. The admin UI
+      // already submits the exact style IDs selected from the current styles
+      // list, so do not re-read the styles index here. Re-reading it adds an
+      // extra KV call without materially improving correctness under eventual
+      // consistency.
+      const requestedStyleIds = Array.isArray(payload.style_ids || payload.styleIds)
+        ? (payload.style_ids || payload.styleIds).map(id => String(id || '').trim()).filter(Boolean)
+        : [];
+      const availableStyles = Array.from(new Set(requestedStyleIds)).map(id => ({ id }));
       const data = normalizeReviewLinkPayload(payload, availableStyles);
+
+      // Do not spend KV reads checking random-code collisions. A 12-character
+      // code over a 57-character alphabet has ~2^70 possibilities, so the
+      // collision probability is negligible for this application. This saves
+      // one or more KV GETs on every link creation.
       let code = normalizeReviewLinkCode(payload.code);
-      for (let i = 0; i < 12 && !code; i += 1) {
-        const candidate = randomReviewLinkCode(8);
-        const existing = await this.getReviewLink(candidate);
-        if (!existing) code = candidate;
-      }
+      if (!code) code = randomReviewLinkCode(12);
       if (!code) throw new Error('生成评分链接失败，请重试');
+
       const row = { code, ...data, created_at: now(), updated_at: now(), deleted_at: null };
+
+      // KV budget for the common create path:
+      //   1) PUT review-link_<code>
+      //   2) GET review-links_index
+      //   3) PUT review-links_index
+      // Keep this path deliberately small so it stays below ESA's runtime
+      // call limit even if the platform counts both reads and writes.
       await putJson(keyReviewLink(code), row);
       await addIndexIdSafely('review-links', code);
       return attachReviewLinkStatus(row);
@@ -1550,17 +1563,33 @@ function createEsaEdgeKVStorage(env) {
   if (!namespace) throw new Error('当前使用 ESA EdgeKV 存储，但未配置 ESA_KV_NAMESPACE。');
 
   const edgeKV = new EdgeKVClass({ namespace });
+  let kvCallNo = 0;
+  async function runKvCall(op, rawKey, fn) {
+    const callNo = ++kvCallNo;
+    const cleaned = cleanKey(rawKey);
+    try {
+      return await fn(cleaned);
+    } catch (error) {
+      const message = error?.message || String(error);
+      // Preserve the original ESA error but add the operation/key so a future
+      // call-budget failure can be diagnosed from the browser response alone.
+      const wrapped = new Error(`${message} [ESA KV #${callNo} ${op} ${cleaned}]`);
+      wrapped.status = error?.status || 503;
+      throw wrapped;
+    }
+  }
+
   const kvAdapter = {
     async get(key, options = {}) {
       const type = options?.type || 'text';
-      return edgeKV.get(cleanKey(key), { type });
+      return runKvCall('GET', key, cleaned => edgeKV.get(cleaned, { type }));
     },
     async put(key, value) {
       // ESA EdgeKV put(key, value) does not expose Workers KV expiration options.
-      return edgeKV.put(cleanKey(key), String(value));
+      return runKvCall('PUT', key, cleaned => edgeKV.put(cleaned, String(value)));
     },
     async delete(key) {
-      return edgeKV.delete(cleanKey(key));
+      return runKvCall('DELETE', key, cleaned => edgeKV.delete(cleaned));
     }
   };
 
