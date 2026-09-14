@@ -1,4 +1,4 @@
-console.info("product-review rating version: 20260722-performance-v12");
+console.info("product-review rating version: 20260914-esa-fast-access-v6");
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
@@ -21,6 +21,19 @@ const bottomPrevBtn = $('#bottomPrevBtn');
 const bottomNextBtn = $('#bottomNextBtn');
 const doneText = $('#doneText');
 const restartBtn = $('#restartBtn');
+const ESA_RECENT_SCORES_KEY = 'product_review_esa_recent_scores_v1';
+const ESA_RECENT_VISIBILITY_TTL_MS = 6 * 60 * 1000;
+function rememberRecentSubmittedScores(rows = []) {
+  if (!Array.isArray(rows) || !rows.length) return;
+  try {
+    const nowTs = Date.now();
+    const current = JSON.parse(localStorage.getItem(ESA_RECENT_SCORES_KEY) || '[]');
+    const fresh = Array.isArray(current) ? current.filter(item => item?.row && nowTs - Number(item.saved_at || 0) <= ESA_RECENT_VISIBILITY_TTL_MS) : [];
+    const byId = new Map(fresh.map(item => [String(item.row.id || ''), item]));
+    rows.forEach(row => { if (row?.id) byId.set(String(row.id), { saved_at: nowTs, row }); });
+    localStorage.setItem(ESA_RECENT_SCORES_KEY, JSON.stringify(Array.from(byId.values()).slice(0, 200)));
+  } catch {}
+}
 
 const defaultScoreTypes = [
   { id: 'main', label: '综合评分' },
@@ -57,6 +70,7 @@ let reviewLinkCode = (() => {
   if (/^(assets|api|admin)$/i.test(code) || code.includes('.')) return '';
   return code;
 })();
+const reviewLinkAccessToken = new URLSearchParams(window.location.search).get('rt') || '';
 let reviewLinkInfo = null;
 let reviewLinkUnavailable = false;
 const ACCESS_ERROR_MESSAGE = '访问地址有问题，请联系管理员获取正确的评分链接。';
@@ -516,7 +530,9 @@ function applyGradeRuleIntro() {
 
 function publicDataUrl() {
   if (!reviewLinkCode) throw new Error(ACCESS_ERROR_MESSAGE);
-  return `/api/public/review-link/${encodeURIComponent(reviewLinkCode)}`;
+  const url = new URL(`/api/public/review-link/${encodeURIComponent(reviewLinkCode)}`, window.location.origin);
+  if (reviewLinkAccessToken) url.searchParams.set('rt', reviewLinkAccessToken);
+  return `${url.pathname}${url.search}`;
 }
 function showAccessError(message = ACCESS_ERROR_MESSAGE) {
   reviewLinkUnavailable = true;
@@ -853,6 +869,7 @@ async function submitCurrentAndNext() {
     const payload = {
       reviewer,
       review_link_code: reviewLinkCode,
+      review_link_token: reviewLinkAccessToken,
       review_date: today(),
       scores: drafts.map((item, index) => ({
         reviewer,
@@ -878,6 +895,7 @@ async function submitCurrentAndNext() {
       headers: { 'content-type': 'application/json; charset=utf-8' },
       body: JSON.stringify(payload)
     });
+    rememberRecentSubmittedScores(data.scores || []);
     (data.scores || []).forEach((score, index) => {
       if (drafts[index]) {
         drafts[index].submitted = true;

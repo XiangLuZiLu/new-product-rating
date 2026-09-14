@@ -1,5 +1,5 @@
-console.info('[product-review] admin performance v12 loaded');
-console.info("product-review admin version: 20260722-performance-v12");
+console.info('[product-review] admin ESA fast-access v6 loaded');
+console.info("product-review admin version: 20260914-esa-fast-access-v6");
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
@@ -91,6 +91,72 @@ const sessionRefreshIntervalMs = Math.min(5 * 60 * 1000, Math.max(30 * 1000, ses
 let activeNetworkRequests = 0;
 let reviewLinksLoadedAt = 0;
 const REVIEW_LINK_CACHE_MS = 30 * 1000;
+const ESA_RECENT_VISIBILITY_TTL_MS = 6 * 60 * 1000;
+const ESA_RECENT_REVIEW_LINKS_KEY = 'product_review_esa_recent_review_links_v1';
+const ESA_RECENT_SCORES_KEY = 'product_review_esa_recent_scores_v1';
+let scoreAutoRefreshTimer = null;
+let scoreAutoRefreshUntil = 0;
+
+function readRecentLocalRows(key) {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || '[]');
+    if (!Array.isArray(parsed)) return [];
+    const nowTs = Date.now();
+    const rows = parsed.filter(item => item && item.row && nowTs - Number(item.saved_at || 0) <= ESA_RECENT_VISIBILITY_TTL_MS);
+    if (rows.length !== parsed.length) localStorage.setItem(key, JSON.stringify(rows));
+    return rows;
+  } catch { return []; }
+}
+function writeRecentLocalRows(key, items) {
+  try { localStorage.setItem(key, JSON.stringify(items)); } catch {}
+}
+function rememberRecentReviewLink(link) {
+  if (!link?.code) return;
+  const current = readRecentLocalRows(ESA_RECENT_REVIEW_LINKS_KEY).filter(item => String(item.row?.code) !== String(link.code));
+  current.unshift({ saved_at: Date.now(), row: link });
+  writeRecentLocalRows(ESA_RECENT_REVIEW_LINKS_KEY, current.slice(0, 50));
+}
+function forgetRecentReviewLinks(codes) {
+  const set = new Set((Array.isArray(codes) ? codes : [codes]).map(String));
+  const current = readRecentLocalRows(ESA_RECENT_REVIEW_LINKS_KEY).filter(item => !set.has(String(item.row?.code || '')));
+  writeRecentLocalRows(ESA_RECENT_REVIEW_LINKS_KEY, current);
+}
+function recentReviewLinks() { return readRecentLocalRows(ESA_RECENT_REVIEW_LINKS_KEY).map(item => item.row); }
+function recentScores() { return readRecentLocalRows(ESA_RECENT_SCORES_KEY).map(item => item.row); }
+function forgetRecentScores(ids) {
+  const set = new Set((Array.isArray(ids) ? ids : [ids]).map(String));
+  const current = readRecentLocalRows(ESA_RECENT_SCORES_KEY).filter(item => !set.has(String(item.row?.id || '')));
+  writeRecentLocalRows(ESA_RECENT_SCORES_KEY, current);
+}
+function scoreMatchesParams(row, params) {
+  const keyword = String(params.get('search') || '').trim().toLowerCase();
+  const dateFrom = String(params.get('date_from') || '');
+  const dateTo = String(params.get('date_to') || '');
+  const linkCode = String(params.get('review_link_code') || '');
+  if (keyword && ![row.style_code, row.season, row.reviewer, row.remark, row.review_link_code].some(v => String(v || '').toLowerCase().includes(keyword))) return false;
+  if (dateFrom && String(row.review_date || '') < dateFrom) return false;
+  if (dateTo && String(row.review_date || '') > dateTo) return false;
+  if (linkCode && String(row.review_link_code || '') !== linkCode) return false;
+  return true;
+}
+function mergeRowsById(primary = [], fallback = []) {
+  const map = new Map();
+  for (const row of primary) if (row?.id) map.set(String(row.id), row);
+  for (const row of fallback) if (row?.id) map.set(String(row.id), row);
+  return Array.from(map.values());
+}
+function startScoreAutoRefresh() {
+  scoreAutoRefreshUntil = Date.now() + ESA_RECENT_VISIBILITY_TTL_MS;
+  if (scoreAutoRefreshTimer) return;
+  scoreAutoRefreshTimer = window.setInterval(() => {
+    if (Date.now() > scoreAutoRefreshUntil || $('#scoreSection')?.classList.contains('hidden')) {
+      window.clearInterval(scoreAutoRefreshTimer);
+      scoreAutoRefreshTimer = null;
+      return;
+    }
+    loadScores({ background: true }).catch(() => {});
+  }, 5000);
+}
 function ensureNetworkProgressBar() {
   let bar = document.getElementById('networkProgressBar');
   if (!bar) {
@@ -608,8 +674,21 @@ function isReviewLinkExpired(link) {
   if (!link || !link.expires_at) return false;
   return String(link.expires_at).replace('T', ' ').slice(0, 19) <= new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
 }
-function reviewLinkUrl(code) {
-  return `${window.location.origin}/${encodeURIComponent(String(code || '').trim())}`;
+function reviewLinkUrl(code, accessToken = '') {
+  const url = new URL(`/${encodeURIComponent(String(code || '').trim())}`, window.location.origin);
+  if (accessToken) url.searchParams.set('rt', accessToken);
+  return url.toString();
+}
+function reviewLinkStyleSnapshot(row) {
+  return {
+    id: String(row?.id || ''),
+    style_code: String(row?.style_code || ''),
+    product_image: String(row?.product_image || ''),
+    season: String(row?.season || ''),
+    base_price: row?.base_price ?? '',
+    style_remark: String(row?.style_remark || row?.remark || ''),
+    active: Number(row?.active ?? 1)
+  };
 }
 
 function reviewLinkLabel(code) {
@@ -1110,6 +1189,7 @@ function setActiveTab(targetId) {
   $$('.tab').forEach(tab => tab.classList.toggle('active', tab.dataset.target === targetId));
   $('#styleSection').classList.toggle('hidden', targetId !== 'styleSection');
   $('#scoreSection').classList.toggle('hidden', targetId !== 'scoreSection');
+  if (targetId === 'scoreSection') startScoreAutoRefresh();
   const linkSection = $('#linkSection');
   if (linkSection) linkSection.classList.toggle('hidden', targetId !== 'linkSection');
   if (targetId === 'linkSection' && (!reviewLinksLoadedAt || Date.now() - reviewLinksLoadedAt > REVIEW_LINK_CACHE_MS)) {
@@ -1709,12 +1789,14 @@ function renderScores() {
   }
   scoresBody.innerHTML = scoreGroups.map((group, index) => {
     const opened = selectedScoreGroupKey === group.key;
+    const pendingSync = group.scores.some(score => score?._esa_sync_pending);
     return `
       <tr class="score-group-row ${opened ? 'opened' : ''}">
         <td class="no-print select-col"><input type="checkbox" data-score-group-select="${escapeHtml(group.key)}" ${selectedScoreGroupKeys.has(group.key) ? 'checked' : ''} /></td>
         <td>
           <button class="link-button reviewer-link" type="button" data-score-group-action="toggle" data-group-index="${index}">${escapeHtml(group.reviewer)}</button>
           <span class="group-count">${group.scores.length} 款</span>
+          ${pendingSync ? '<small class="muted">ESA 同步中</small>' : ''}
         </td>
         <td class="review-link-group-cell">${reviewLinkInlineHtml(group.review_link_code)}</td>
         <td>${escapeHtml(group.submitted_at || '-')}</td>
@@ -2134,7 +2216,7 @@ function renderReviewLinks() {
     const expired = Boolean(link.expired) || isReviewLinkExpired(link);
     const enabled = Number(link.active ?? 1) === 1 && !link.deleted_at;
     const status = !enabled ? '<span class="status-off">已停用</span>' : expired ? '<span class="status-off">已过期</span>' : '<strong class="status-on">有效</strong>';
-    const url = reviewLinkUrl(link.code);
+    const url = reviewLinkUrl(link.code, link.access_token || '');
     return `
       <tr>
         <td class="no-print select-col"><input type="checkbox" data-review-link-select="${escapeHtml(link.code)}" ${selectedReviewLinkCodes.has(String(link.code)) ? 'checked' : ''} /></td>
@@ -2160,7 +2242,11 @@ async function loadReviewLinks(options = {}) {
     return;
   }
   const data = await requestJson('/api/review-links');
-  reviewLinks = data.links || [];
+  const serverLinks = data.links || [];
+  const mergedLinks = new Map();
+  serverLinks.forEach(item => { if (item?.code) mergedLinks.set(String(item.code), item); });
+  recentReviewLinks().forEach(item => { if (item?.code) mergedLinks.set(String(item.code), item); });
+  reviewLinks = Array.from(mergedLinks.values()).sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
   reviewLinksLoadedAt = Date.now();
   const availableCodes = new Set(reviewLinks.map(item => String(item.code || '')));
   selectedReviewLinkCodes = new Set(Array.from(selectedReviewLinkCodes).filter(code => availableCodes.has(code)));
@@ -2254,7 +2340,7 @@ async function showEditReviewLinkDialog(link) {
       const data = await requestJson(`/api/review-links/${encodeURIComponent(link.code)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json; charset=utf-8' },
-        body: JSON.stringify({ name, expires_at: expires, remark, style_ids })
+        body: JSON.stringify({ name, expires_at: expires, remark, style_ids, style_snapshots: styles.filter(row => style_ids.includes(String(row.id))).map(reviewLinkStyleSnapshot) })
       });
       const updatedLink = data.link || { ...link, name, expires_at: expires, remark, style_ids, style_count: style_ids.length };
       reviewLinks = reviewLinks.map(item => String(item.code) === String(link.code) ? updatedLink : item);
@@ -2339,14 +2425,15 @@ function showGenerateReviewLinkDialog() {
       const data = await requestJson('/api/review-links', {
         method: 'POST',
         headers: { 'content-type': 'application/json; charset=utf-8' },
-        body: JSON.stringify({ name, expires_at: expires, remark, style_ids: selected.map(row => row.id) })
+        body: JSON.stringify({ name, expires_at: expires, remark, style_ids: selected.map(row => row.id), style_snapshots: selected.map(reviewLinkStyleSnapshot) })
       });
       const createdLink = data.link;
-      const url = reviewLinkUrl(createdLink?.code);
+      const url = reviewLinkUrl(createdLink?.code, createdLink?.access_token || data.access_token || '');
       close();
       selectedStyleIds = new Set();
       renderStyles();
       if (createdLink) {
+        rememberRecentReviewLink(createdLink);
         reviewLinks = [createdLink, ...reviewLinks.filter(item => String(item.code) !== String(createdLink.code))];
         reviewLinksLoadedAt = Date.now();
         renderReviewLinks();
@@ -2365,12 +2452,23 @@ function showGenerateReviewLinkDialog() {
   window.setTimeout(() => host.querySelector('#reviewLinkNameInput')?.focus(), 20);
 }
 
-async function loadScores() {
+async function loadScores(options = {}) {
   const params = new URLSearchParams(new FormData(scoreSearchForm));
   const data = await requestJson(`/api/scores?${params}`);
-  scores = data.scores || [];
+  const serverScores = data.scores || [];
+  const serverIds = new Set(serverScores.map(row => String(row?.id || '')).filter(Boolean));
+  const allRecent = recentScores();
+  const syncedIds = allRecent.filter(row => serverIds.has(String(row?.id || ''))).map(row => String(row.id));
+  if (syncedIds.length) forgetRecentScores(syncedIds);
+  const localRecent = allRecent
+    .filter(row => !serverIds.has(String(row?.id || '')))
+    .filter(row => scoreMatchesParams(row, params))
+    .map(row => ({ ...row, _esa_sync_pending: true }));
+  scores = mergeRowsById(serverScores, localRecent)
+    .sort((a, b) => String(b.submitted_at || b.created_at || '').localeCompare(String(a.submitted_at || a.created_at || '')));
   updateScoreLinkFilterOptions();
   renderScores();
+  if (localRecent.length) startScoreAutoRefresh();
 }
 let stylePreviewLocalObjectUrl = '';
 let pendingStyleImageFile = null;
@@ -2938,6 +3036,7 @@ if (deleteSelectedReviewLinksBtn) {
         deletedList.push(...(data.deleted_codes || chunk).map(String));
       }
       const deletedCodes = new Set(deletedList);
+      forgetRecentReviewLinks(Array.from(deletedCodes));
       reviewLinks = reviewLinks.filter(item => !deletedCodes.has(String(item.code)));
       selectedReviewLinkCodes.clear();
       reviewLinksLoadedAt = Date.now();
@@ -2958,7 +3057,7 @@ if (reviewLinksBody) {
     if (!btn) return;
     const code = String(btn.dataset.code || '');
     const link = reviewLinks.find(item => String(item.code) === code);
-    const url = reviewLinkUrl(code);
+    const url = reviewLinkUrl(code, link?.access_token || '');
     if (btn.dataset.linkAction === 'copy') {
       try { await copyText(url); showMessage('评分链接已复制'); } catch (e) { showMessage('复制失败，请手动复制链接', 'error'); }
       return;
@@ -2982,6 +3081,7 @@ if (reviewLinksBody) {
       try {
         await requestJson(`/api/review-links/${encodeURIComponent(code)}`, { method: 'DELETE' });
         selectedReviewLinkCodes.delete(code);
+        forgetRecentReviewLinks(code);
         reviewLinks = reviewLinks.filter(item => String(item.code) !== code);
         reviewLinksLoadedAt = Date.now();
         renderReviewLinks();
@@ -3127,6 +3227,7 @@ if (deleteAllScoresBtn) {
         body: JSON.stringify({ ids })
       });
       const deletedIds = new Set((data.deleted_ids || ids).map(String));
+      forgetRecentScores(Array.from(deletedIds));
       scores = scores.filter(score => !deletedIds.has(String(score.id)));
       selectedScoreGroupKeys = new Set();
       selectedScoreGroupKey = null;
@@ -3264,6 +3365,16 @@ cancelScoreEditBtn.addEventListener('click', () => { editingScoreId = null; edit
 $('#closeHistoryBtn').addEventListener('click', () => historyPanel.classList.add('hidden'));
 $('#printBtn').addEventListener('click', () => window.print());
 
+
+window.addEventListener('storage', (event) => {
+  if (event.key === ESA_RECENT_SCORES_KEY) {
+    startScoreAutoRefresh();
+    if (!$('#scoreSection')?.classList.contains('hidden')) loadScores({ background: true }).catch(() => {});
+  }
+  if (event.key === ESA_RECENT_REVIEW_LINKS_KEY && !$('#linkSection')?.classList.contains('hidden')) {
+    loadReviewLinks({ force: true }).catch(() => {});
+  }
+});
 
 window.addEventListener('focus', checkLocalSessionExpiry);
 document.addEventListener('visibilitychange', () => {

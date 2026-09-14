@@ -1,5 +1,5 @@
 import { getStorage, normalizeScorePayload } from '../../_shared/storage.js';
-import { readKvWithPropagationRetry } from '../../_shared/kvConsistency.js';
+import { verifyReviewLinkBootstrapToken } from '../../_shared/reviewLinkBootstrap.js';
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8' } });
@@ -42,7 +42,7 @@ function newSubmissionId() {
     : `submission_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 }
 
-export async function onRequestPost({ request, env }) {
+export async function onRequestPost({ request, env, context }) {
   try {
     const storage = getStorage(env);
     const payload = await request.json();
@@ -53,20 +53,19 @@ export async function onRequestPost({ request, env }) {
     if (!reviewer) return json({ ok: false, message: '评分人姓名不能为空' }, 400);
 
     const reviewLinkCode = normalizeLinkCode(payload.review_link_code || payload.reviewLinkCode || '');
+    let reviewLinkSnapshot = null;
     if (!reviewLinkCode) {
       return json({ ok: false, code: 'REVIEW_LINK_REQUIRED', message: '访问地址有问题，请联系管理员获取正确的评分链接。' }, 403);
     }
     if (reviewLinkCode) {
       if (typeof storage.getReviewLink !== 'function') return json({ ok: false, message: '当前存储暂不支持评分链接' }, 400);
-      const linkRead = await readKvWithPropagationRetry(() => storage.getReviewLink(reviewLinkCode), env);
-      const link = linkRead.value;
+      const token = String(payload.review_link_token || payload.reviewLinkToken || '').trim();
+      const tokenData = token ? await verifyReviewLinkBootstrapToken(token, env, reviewLinkCode) : null;
+      let link = await storage.getReviewLink(reviewLinkCode);
+      if (link?.public_snapshot) reviewLinkSnapshot = link.public_snapshot;
+      if (!link && tokenData?.link) { link = tokenData.link; reviewLinkSnapshot = tokenData.snapshot || null; }
       if (!link || link.deleted_at || Number(link.active ?? 1) !== 1) {
-        return json({
-          ok: false,
-          code: 'LINK_NOT_FOUND',
-          message: '评分链接暂时无法读取。如果链接刚生成，可能正在同步到当前 ESA 节点，请稍后重新提交。',
-          kv_retry_attempts: linkRead.attempts
-        }, 404);
+        return json({ ok: false, code: 'LINK_NOT_FOUND', message: '该评分链接不存在或已被删除，请联系管理员重新生成。' }, 404);
       }
       if (linkExpired(link)) {
         return json({ ok: false, code: 'LINK_EXPIRED', message: '评分链接已过期，无法提交。' }, 410);
@@ -78,6 +77,30 @@ export async function onRequestPost({ request, env }) {
 
     const review_date = beijingDate();
     const submitted_at = beijingDateTime();
+    const submission_id = String(payload.submission_id || '').trim() || newSubmissionId();
+
+    if (typeof storage.submitScoresFast === 'function') {
+      const result = await storage.submitScoresFast(list, {
+        reviewer, review_date, submission_id, submitted_at, review_link_code: reviewLinkCode, score_snapshot: reviewLinkSnapshot
+      });
+      const scores = result.scores || [];
+      const backgroundTasks = [];
+      if (result.marker && typeof storage.setDailySubmissionMarker === 'function') {
+        backgroundTasks.push(() => storage.setDailySubmissionMarker(result.marker));
+      }
+      if (typeof storage.deletePublicDraft === 'function') {
+        backgroundTasks.push(() => storage.deletePublicDraft(reviewer, reviewLinkCode));
+      }
+      if (backgroundTasks.length) {
+        if (context && typeof context.waitUntil === 'function') {
+          context.waitUntil(new Promise(resolve => setTimeout(resolve, 0))
+            .then(() => Promise.allSettled(backgroundTasks.map(task => task()))));
+        } else {
+          await Promise.allSettled(backgroundTasks.map(task => task()));
+        }
+      }
+      return json({ ok: true, submission_id, submitted_at, scores, visibility: 'accepted' }, 201);
+    }
 
     const existing = await getDailySubmission(storage, reviewer, review_date, reviewLinkCode);
     if (existing) {
@@ -92,25 +115,13 @@ export async function onRequestPost({ request, env }) {
 
     const scoreFields = await storage.getScoreFields();
     const gradeRules = storage.getGradeRules ? await storage.getGradeRules() : undefined;
-    const submission_id = String(payload.submission_id || '').trim() || newSubmissionId();
-
     const normalized = list.map(item => normalizeScorePayload({
-      ...item,
-      reviewer,
-      review_date: item.review_date || review_date,
-      submission_id,
-      submitted_at,
-      review_link_code: reviewLinkCode
+      ...item, reviewer, review_date: item.review_date || review_date, submission_id, submitted_at, review_link_code: reviewLinkCode
     }, scoreFields, gradeRules));
-
     const scores = typeof storage.createScoresBatch === 'function'
       ? await storage.createScoresBatch(normalized, { reviewer, review_date, submission_id, submitted_at, review_link_code: reviewLinkCode, skip_duplicate_check: true })
       : [];
-    if (!scores.length) {
-      for (const item of normalized) {
-        scores.push(await storage.createScore(item));
-      }
-    }
+    if (!scores.length) for (const item of normalized) scores.push(await storage.createScore(item));
     if (typeof storage.deletePublicDraft === 'function') {
       try { await storage.deletePublicDraft(reviewer, reviewLinkCode); } catch (_) {}
     }

@@ -1435,6 +1435,107 @@ function createKVStorage(env) {
       }
       return null;
     },
+    async submitScoresFast(items = [], meta = {}) {
+      const rawItems = Array.isArray(items) ? items : [];
+      if (!rawItems.length) return { scores: [], marker: null };
+
+      const reviewerName = normalizeReviewerName(meta.reviewer || rawItems[0]?.reviewer);
+      const reviewDate = String(meta.review_date || rawItems[0]?.review_date || beijingDate());
+      const reviewLinkCode = normalizeReviewLinkCode(meta.review_link_code || meta.reviewLinkCode || rawItems[0]?.review_link_code || '');
+      const submissionId = String(meta.submission_id || rawItems[0]?.submission_id || newSubmissionId());
+      const submittedAt = String(meta.submitted_at || rawItems[0]?.submitted_at || beijingDateTime());
+      if (!reviewerName) throw new Error('评分人姓名不能为空');
+
+      // Fast duplicate guard: one marker read plus the packed score snapshot.
+      // The packed snapshot is then reused for the actual append, avoiding a
+      // second GET of scores:index in the same execution.
+      const marker = await getJson(keySubmissionDay(reviewerName, reviewDate, reviewLinkCode), null);
+      if (marker && marker.reviewer && String(marker.review_date || '') === reviewDate
+        && (!reviewLinkCode || normalizeReviewLinkCode(marker.review_link_code) === reviewLinkCode)) {
+        const error = new Error(`${reviewerName} 今天已经通过该评分链接提交过评分，不能重复提交。`);
+        error.status = 409;
+        throw error;
+      }
+
+      const scoreSnapshot = meta.score_snapshot && typeof meta.score_snapshot === 'object' ? meta.score_snapshot : null;
+      let types;
+      let fields;
+      let rules;
+      if (scoreSnapshot && Array.isArray(scoreSnapshot.score_fields) && scoreSnapshot.score_fields.length) {
+        types = normalizeScoreTypes(scoreSnapshot.score_types || DEFAULT_SCORE_TYPES);
+        fields = normalizeScoreFields(scoreSnapshot.score_fields, types);
+        rules = normalizeGradeRules(scoreSnapshot.grade_rules || DEFAULT_GRADE_RULES);
+      } else {
+        const settings = await getSettings();
+        types = normalizeScoreTypes(settings.score_types || DEFAULT_SCORE_TYPES);
+        fields = normalizeScoreFields(settings.score_fields || DEFAULT_SCORE_FIELDS, types);
+        rules = normalizeGradeRules(settings.score_grade_rules || settings.grade_rules || DEFAULT_GRADE_RULES);
+      }
+      const entries = await getPackedScoreIndexEntries();
+
+      const duplicate = entries.find(item => isPackedScoreRow(item) && !item.deleted_at
+        && normalizeReviewerName(item.reviewer) === reviewerName
+        && String(item.review_date || '') === reviewDate
+        && (!reviewLinkCode || normalizeReviewLinkCode(item.review_link_code) === reviewLinkCode));
+      if (duplicate) {
+        const error = new Error(`${reviewerName} 今天已经通过该评分链接提交过评分，不能重复提交。`);
+        error.status = 409;
+        throw error;
+      }
+
+      const normalizedItems = rawItems.map(item => normalizeScorePayload({
+        ...item,
+        reviewer: reviewerName,
+        review_date: item.review_date || reviewDate,
+        submission_id: submissionId,
+        submitted_at: submittedAt,
+        review_link_code: reviewLinkCode
+      }, fields, rules));
+
+      const rows = normalizedItems.map(data => attachScoreItems({
+        id: crypto.randomUUID(),
+        ...data,
+        reviewer: reviewerName,
+        review_date: reviewDate,
+        submission_id: submissionId,
+        submitted_at: submittedAt,
+        review_link_code: normalizeReviewLinkCode(data.review_link_code || reviewLinkCode),
+        style_id: String(data.style_id || ''),
+        product_image: String(data.product_image || ''),
+        style_code: String(data.style_code || ''),
+        season: String(data.season || ''),
+        base_price: Object.prototype.hasOwnProperty.call(data, 'base_price') ? data.base_price : undefined,
+        created_at: submittedAt,
+        updated_at: submittedAt,
+        deleted_at: null
+      }, fields));
+
+      await setPackedScoreIndexEntries([...rows, ...entries]);
+      return {
+        scores: rows,
+        marker: {
+          reviewer: reviewerName,
+          review_date: reviewDate,
+          submission_id: submissionId,
+          submitted_at: submittedAt,
+          review_link_code: reviewLinkCode
+        }
+      };
+    },
+    async setDailySubmissionMarker(meta = {}) {
+      const reviewerName = normalizeReviewerName(meta.reviewer);
+      const reviewDate = String(meta.review_date || beijingDate());
+      const reviewLinkCode = normalizeReviewLinkCode(meta.review_link_code || meta.reviewLinkCode || '');
+      if (!reviewerName) return false;
+      await putJson(keySubmissionDay(reviewerName, reviewDate, reviewLinkCode), {
+        reviewer: reviewerName,
+        review_date: reviewDate,
+        submission_id: String(meta.submission_id || ''),
+        submitted_at: String(meta.submitted_at || beijingDateTime()),
+        review_link_code: reviewLinkCode
+      }, { expirationTtl: Math.max(60, 48 * 60 * 60) });
+      return true;
+    },
     async createScoresBatch(items = [], meta = {}) {
       const normalizedItems = Array.isArray(items) ? items : [];
       if (!normalizedItems.length) return [];
@@ -1537,7 +1638,11 @@ function createKVStorage(env) {
         .map(item => deleteKey(keyReviewLink(item.id)).catch(() => false)));
 
       const rows = loaded.map(item => item.row).filter(row => row && !row.deleted_at);
-      return rows.map(attachReviewLinkStatus).sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+      return rows.map((row) => {
+        const full = attachReviewLinkStatus(row);
+        const { public_snapshot, ...summary } = full || {};
+        return summary;
+      }).sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
     },
     async getReviewLink(code) {
       const cleanCode = normalizeReviewLinkCode(code);
@@ -1545,45 +1650,106 @@ function createKVStorage(env) {
       const row = await getJson(keyReviewLink(cleanCode), null);
       return row && !row.deleted_at ? attachReviewLinkStatus(row) : null;
     },
-    async createReviewLink(payload) {
-      // ESA EdgeKV has a very small per-execution call budget. The admin UI
-      // already submits the exact style IDs selected from the current styles
-      // list, so do not re-read the styles index here. Re-reading it adds an
-      // extra KV call without materially improving correctness under eventual
-      // consistency.
+    async createReviewLinkFast(payload) {
       const requestedStyleIds = Array.isArray(payload.style_ids || payload.styleIds)
         ? (payload.style_ids || payload.styleIds).map(id => String(id || '').trim()).filter(Boolean)
         : [];
       const availableStyles = Array.from(new Set(requestedStyleIds)).map(id => ({ id }));
       const data = normalizeReviewLinkPayload(payload, availableStyles);
-
-      // Do not spend KV reads checking random-code collisions. A 12-character
-      // code over a 57-character alphabet has ~2^70 possibilities, so the
-      // collision probability is negligible for this application. This saves
-      // one or more KV GETs on every link creation.
       let code = normalizeReviewLinkCode(payload.code);
       if (!code) code = randomReviewLinkCode(12);
       if (!code) throw new Error('生成评分链接失败，请重试');
 
-      const row = { code, ...data, created_at: now(), updated_at: now(), deleted_at: null };
-
-      // KV budget for the common create path:
-      //   1) PUT review-link_<code>
-      //   2) GET review-links_index
-      //   3) PUT review-links_index
-      // Keep this path deliberately small so it stays below ESA's runtime
-      // call limit even if the platform counts both reads and writes.
+      // Snapshot the public scoring payload into the review-link record. This
+      // makes public access a single EdgeKV read after propagation and avoids
+      // N style reads + settings reads on every visit.
+      const settings = await getSettings();
+      const types = normalizeScoreTypes(settings.score_types || DEFAULT_SCORE_TYPES);
+      const fields = normalizeScoreFields(settings.score_fields || DEFAULT_SCORE_FIELDS, types);
+      const gradeRules = normalizeGradeRules(settings.score_grade_rules || settings.grade_rules || DEFAULT_GRADE_RULES);
+      const imageSettings = normalizeImageSettings(settings.image_storage_settings || {}, imageSettingsFromEnv(env));
+      const requestedSnapshots = Array.isArray(payload.style_snapshots || payload.styleSnapshots)
+        ? (payload.style_snapshots || payload.styleSnapshots)
+        : [];
+      const allowedIds = new Set(data.style_ids.map(String));
+      const styles = requestedSnapshots.map((item) => ({
+        id: String(item?.id || ''),
+        style_code: String(item?.style_code || ''),
+        product_image: String(item?.product_image || ''),
+        season: String(item?.season || ''),
+        base_price: item?.base_price ?? '',
+        style_remark: String(item?.style_remark || item?.remark || ''),
+        active: Number(item?.active ?? 1)
+      })).filter(item => item.id && allowedIds.has(item.id));
+      const publicSnapshot = {
+        styles,
+        score_types: types,
+        score_fields: fields,
+        grade_rules: gradeRules,
+        image_settings: {
+          image_key_prefix: imageSettings.image_key_prefix || 'review-images',
+          public_image_base_url: imageSettings.public_image_base_url || '',
+          public_image_path_prefix: imageSettings.public_image_path_prefix || '',
+          s3_endpoint: imageSettings.s3_endpoint || '',
+          s3_bucket: imageSettings.s3_bucket || ''
+        }
+      };
+      const row = { code, ...data, public_snapshot: publicSnapshot, created_at: now(), updated_at: now(), deleted_at: null };
       await putJson(keyReviewLink(code), row);
-      await addIndexIdSafely('review-links', code);
       return attachReviewLinkStatus(row);
+    },
+    async ensureReviewLinkIndexed(code) {
+      const cleanCode = normalizeReviewLinkCode(code);
+      if (!cleanCode) return false;
+      await addIndexIdSafely('review-links', cleanCode);
+      return true;
+    },
+    async createReviewLink(payload) {
+      const row = await this.createReviewLinkFast(payload);
+      await this.ensureReviewLinkIndexed(row.code);
+      return row;
     },
     async updateReviewLink(code, payload) {
       const cleanCode = normalizeReviewLinkCode(code);
       const old = await this.getReviewLink(cleanCode);
       if (!old) { const error = new Error('评分链接不存在'); error.status = 404; throw error; }
-      const activeStyles = await this.listStyles({ activeOnly: true });
+      const requestedStyleIds = Array.isArray(payload.style_ids || payload.styleIds)
+        ? (payload.style_ids || payload.styleIds).map(id => String(id || '').trim()).filter(Boolean)
+        : (old.style_ids || []).map(String);
+      const activeStyles = Array.from(new Set(requestedStyleIds)).map(id => ({ id }));
       const data = normalizeReviewLinkPayload({ ...old, ...payload, code: cleanCode }, activeStyles);
-      const row = { ...old, ...data, code: cleanCode, updated_at: now(), deleted_at: null };
+      const settings = await getSettings();
+      const types = normalizeScoreTypes(settings.score_types || DEFAULT_SCORE_TYPES);
+      const fields = normalizeScoreFields(settings.score_fields || DEFAULT_SCORE_FIELDS, types);
+      const gradeRules = normalizeGradeRules(settings.score_grade_rules || settings.grade_rules || DEFAULT_GRADE_RULES);
+      const imageSettings = normalizeImageSettings(settings.image_storage_settings || {}, imageSettingsFromEnv(env));
+      const requestedSnapshots = Array.isArray(payload.style_snapshots || payload.styleSnapshots)
+        ? (payload.style_snapshots || payload.styleSnapshots)
+        : [];
+      const allowedIds = new Set(data.style_ids.map(String));
+      const styles = requestedSnapshots.map((item) => ({
+        id: String(item?.id || ''),
+        style_code: String(item?.style_code || ''),
+        product_image: String(item?.product_image || ''),
+        season: String(item?.season || ''),
+        base_price: item?.base_price ?? '',
+        style_remark: String(item?.style_remark || item?.remark || ''),
+        active: Number(item?.active ?? 1)
+      })).filter(item => item.id && allowedIds.has(item.id));
+      const publicSnapshot = styles.length ? {
+        styles,
+        score_types: types,
+        score_fields: fields,
+        grade_rules: gradeRules,
+        image_settings: {
+          image_key_prefix: imageSettings.image_key_prefix || 'review-images',
+          public_image_base_url: imageSettings.public_image_base_url || '',
+          public_image_path_prefix: imageSettings.public_image_path_prefix || '',
+          s3_endpoint: imageSettings.s3_endpoint || '',
+          s3_bucket: imageSettings.s3_bucket || ''
+        }
+      } : old.public_snapshot;
+      const row = { ...old, ...data, public_snapshot: publicSnapshot, code: cleanCode, updated_at: now(), deleted_at: null };
       await putJson(keyReviewLink(cleanCode), row);
       return attachReviewLinkStatus(row);
     },
