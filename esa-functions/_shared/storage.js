@@ -1587,15 +1587,38 @@ function createKVStorage(env) {
       await putJson(keyReviewLink(cleanCode), row);
       return attachReviewLinkStatus(row);
     },
+    async deleteReviewLinksBatch(codes = []) {
+      const cleanCodes = Array.from(new Set((Array.isArray(codes) ? codes : [])
+        .map(normalizeReviewLinkCode)
+        .filter(Boolean)));
+      if (!cleanCodes.length) return { deleted_count: 0, deleted_codes: [] };
+      if (cleanCodes.length > 5) {
+        const error = new Error('ESA EdgeKV 单次最多删除 5 个评分链接，请分批删除');
+        error.status = 400;
+        throw error;
+      }
+
+      // ESA has a hard limit of 8 KV fetch calls per function execution.
+      // One batch of 5 links costs at most 7 normal calls:
+      //   1 GET review-links_index + 5 DELETE link keys + 1 PUT index.
+      // Serialize the index mutation so all deleted codes are removed with a
+      // single index rewrite instead of one GET/PUT pair per link.
+      return queueIndexUpdate('review-links', async () => {
+        const ids = await mergeIndexSnapshots('review-links');
+        for (const code of cleanCodes) {
+          await deleteKey(keyReviewLink(code));
+        }
+        const deletedSet = new Set(cleanCodes);
+        const next = ids.filter(item => !deletedSet.has(String(item)));
+        await setIndex('review-links', next);
+        indexSnapshotCache.set('review-links', { ids: [...next], at: Date.now() });
+        return { deleted_count: cleanCodes.length, deleted_codes: cleanCodes };
+      });
+    },
     async deleteReviewLink(code) {
       const cleanCode = normalizeReviewLinkCode(code);
       if (!cleanCode) { const error = new Error('评分链接不存在'); error.status = 404; throw error; }
-
-      // Hard-delete both the link record and its index membership. Index
-      // updates merge several snapshots first to reduce stale-POP overwrite
-      // risk while keeping product_review_review_links_index clean.
-      await deleteKey(keyReviewLink(cleanCode));
-      await removeIndexIdSafely('review-links', cleanCode);
+      await this.deleteReviewLinksBatch([cleanCode]);
       return true;
     },
     async getPublicDraft(reviewer, linkCode = '') {

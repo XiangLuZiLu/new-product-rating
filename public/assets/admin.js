@@ -2924,19 +2924,27 @@ if (deleteSelectedReviewLinksBtn) {
     if (!confirmed) return;
     setButtonBusy(event.currentTarget, true, '删除中...');
     try {
-      const data = await requestJson('/api/review-links/delete-selected', {
-        method: 'DELETE',
-        headers: { 'content-type': 'application/json; charset=utf-8' },
-        body: JSON.stringify({ codes })
-      });
-      const deletedCodes = new Set((data.deleted_codes || codes).map(String));
+      // ESA EdgeKV allows only 8 KV calls per function execution. Delete at
+      // most 5 links in each HTTP request so the server can hard-delete all
+      // link keys and rewrite review_links_index without exceeding the limit.
+      const deletedList = [];
+      for (let i = 0; i < codes.length; i += 5) {
+        const chunk = codes.slice(i, i + 5);
+        const data = await requestJson('/api/review-links/delete-selected', {
+          method: 'DELETE',
+          headers: { 'content-type': 'application/json; charset=utf-8' },
+          body: JSON.stringify({ codes: chunk })
+        });
+        deletedList.push(...(data.deleted_codes || chunk).map(String));
+      }
+      const deletedCodes = new Set(deletedList);
       reviewLinks = reviewLinks.filter(item => !deletedCodes.has(String(item.code)));
       selectedReviewLinkCodes.clear();
       reviewLinksLoadedAt = Date.now();
       renderReviewLinks();
       updateScoreLinkFilterOptions();
       if (scores.length) renderScores();
-      showMessage(`已删除 ${data.deleted_count ?? codes.length} 个评分链接。`);
+      showMessage(`已删除 ${deletedCodes.size} 个评分链接。`);
     } catch (e) {
       showMessage(e.message || '删除选中评分链接失败', 'error');
     } finally {
