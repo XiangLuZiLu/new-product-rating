@@ -1090,9 +1090,11 @@ async function requestJson(path, options = {}) {
 async function uploadImageFile(file, styleCode = '') {
   if (!file) return '';
   if (!file.type.startsWith('image/')) throw new Error('请选择图片文件');
+  const cleanStyleCode = String(styleCode || '').trim();
+  if (!cleanStyleCode) throw new Error('请先填写款式编码，再上传图片');
   const form = new FormData();
   form.append('file', file);
-  if (styleCode) form.append('style_code', styleCode);
+  form.append('style_code', cleanStyleCode);
   await waitForNextPaint();
   beginNetworkActivity();
   try {
@@ -1448,7 +1450,8 @@ async function commitPendingInlineImageIfNeeded(row) {
   const id = row?.dataset?.styleEditId;
   const file = id ? pendingInlineImageFiles.get(id) : null;
   if (!file) return '';
-  const url = await uploadImageFile(file, styleForm?.elements?.style_code?.value || '');
+  const styleCode = row?.querySelector('[data-inline-field="style_code"]')?.value || '';
+  const url = await uploadImageFile(file, styleCode);
   pendingInlineImageFiles.delete(id);
   clearInlineLocalImagePreview(row, { clearPending: false });
   updateInlineImagePreview(row, url);

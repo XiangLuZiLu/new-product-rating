@@ -37,13 +37,12 @@ function safeExt(filename = '', contentType = '') {
   return allow.has(ext) ? ext : 'bin';
 }
 
-function safeBaseName(filename = 'image') {
-  const name = String(filename || 'image')
-    .replace(/\.[^.]+$/, '')
+function safeStyleCode(value = '') {
+  return String(value || '')
+    .trim()
     .replace(/[^a-zA-Z0-9_-]+/g, '-')
     .replace(/^-+|-+$/g, '')
-    .slice(0, 40);
-  return name || 'image';
+    .slice(0, 80);
 }
 
 function isUploadFileLike(value) {
@@ -57,12 +56,10 @@ function buildObjectKey(file, config, styleCode = '') {
     .trim()
     .replace(/[^a-zA-Z0-9_-]+/g, '-')
     .replace(/^-+|-+$/g, '') || 'review-images';
+  const style = safeStyleCode(styleCode);
+  if (!style) throw jsonError('请先填写款式编码，再上传图片', 400);
   const ext = safeExt(file.name, file.type);
-  const base = safeBaseName(file.name);
-  const style = safeBaseName(styleCode);
-  const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-  const random = crypto.randomUUID().replace(/-/g, '').slice(0, 16);
-  return `${prefix}-${date}-${Date.now()}-${random}-${base}.${ext}`;
+  return `${prefix}-${style}.${ext}`;
 }
 
 function withTrailingSlash(value) {
