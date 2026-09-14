@@ -1107,9 +1107,10 @@ function createKVStorage(env) {
     await putJson(key(`${name}:index`), Array.from(new Set(ids.map(String).filter(Boolean))));
   }
 
-  const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
   const indexUpdateLocks = new Map();
   const indexSnapshotCache = new Map();
+  let settingsCacheLoaded = false;
+  let settingsCache = null;
 
   async function queueIndexUpdate(name, task) {
     const previous = indexUpdateLocks.get(name) || Promise.resolve();
@@ -1122,29 +1123,16 @@ function createKVStorage(env) {
     }
   }
 
-  // EdgeKV is eventually consistent across POPs. For the two admin-managed
-  // indexes below, merge several short-interval snapshots before the first
-  // write in a request. Subsequent index mutations in the same request reuse
-  // the just-written local snapshot and are serialized, so batch deletion
-  // cannot re-add IDs removed by another concurrent Promise in that request.
+  // ESA EdgeKV limits the number of KV fetch calls in a single Functions
+  // execution. Do only one index read per index mutation, then reuse the
+  // in-request snapshot and serialize subsequent mutations. This keeps
+  // create/update/delete flows safely below the runtime fetch-call limit.
   async function mergeIndexSnapshots(name) {
     const cached = indexSnapshotCache.get(name);
     if (cached && Date.now() - cached.at < 5000) return [...cached.ids];
 
-    const merged = new Set();
-    const collect = async () => {
-      const ids = await getIndex(name);
-      ids.forEach(id => {
-        const value = String(id || '').trim();
-        if (value) merged.add(value);
-      });
-    };
-    await collect();
-    await wait(120);
-    await collect();
-    await wait(280);
-    await collect();
-    const result = Array.from(merged);
+    const ids = await getIndex(name);
+    const result = Array.from(new Set(ids.map(id => String(id || '').trim()).filter(Boolean)));
     indexSnapshotCache.set(name, { ids: result, at: Date.now() });
     return result;
   }
@@ -1173,8 +1161,17 @@ function createKVStorage(env) {
     });
   }
 
-  async function getSettings() { return getJson(key('settings'), {}); }
-  async function setSettings(settings) { await putJson(key('settings'), settings); }
+  async function getSettings() {
+    if (settingsCacheLoaded) return settingsCache || {};
+    settingsCache = await getJson(key('settings'), {});
+    settingsCacheLoaded = true;
+    return settingsCache || {};
+  }
+  async function setSettings(settings) {
+    settingsCache = settings && typeof settings === 'object' ? settings : {};
+    settingsCacheLoaded = true;
+    await putJson(key('settings'), settingsCache);
+  }
   async function getScoreTypesSetting() { const s = await getSettings(); return normalizeScoreTypes(s.score_types || DEFAULT_SCORE_TYPES); }
   async function getGradeRulesSetting() { const s = await getSettings(); return normalizeGradeRules(s.score_grade_rules || s.grade_rules || DEFAULT_GRADE_RULES); }
   async function getStyleById(id) { return id ? getJson(keyStyle(String(id)), null) : null; }
@@ -1469,8 +1466,12 @@ function createKVStorage(env) {
       return row && !row.deleted_at ? attachReviewLinkStatus(row) : null;
     },
     async createReviewLink(payload) {
-      const activeStyles = await this.listStyles({ activeOnly: true });
-      const data = normalizeReviewLinkPayload(payload, activeStyles);
+      // Generating a link only needs to validate that the selected style IDs
+      // are present in the styles index. Loading every style record here can
+      // easily exceed ESA EdgeKV's per-execution fetch-call limit.
+      const styleIds = await getIndex('styles');
+      const availableStyles = styleIds.map(id => ({ id: String(id) }));
+      const data = normalizeReviewLinkPayload(payload, availableStyles);
       let code = normalizeReviewLinkCode(payload.code);
       for (let i = 0; i < 12 && !code; i += 1) {
         const candidate = randomReviewLinkCode(8);
