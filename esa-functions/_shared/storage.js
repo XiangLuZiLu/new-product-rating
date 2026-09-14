@@ -1345,6 +1345,39 @@ function createKVStorage(env) {
       await putJson(keyStyle(String(id)), row);
       return row;
     },
+    async deleteStyleKeys(ids = []) {
+      const cleanIds = Array.from(new Set((Array.isArray(ids) ? ids : [])
+        .map(value => String(value || '').trim())
+        .filter(Boolean)));
+      if (!cleanIds.length) return { deleted_count: 0, deleted_ids: [] };
+      if (cleanIds.length > 5) {
+        const error = new Error('ESA EdgeKV 单个删除工作请求最多处理 5 个款式');
+        error.status = 400;
+        throw error;
+      }
+
+      // Physical deletion only. Do NOT rewrite styles_index here so several
+      // independent HTTP requests can run concurrently without racing on the
+      // same shared index value. Five DELETE calls stay safely below ESA's
+      // per-execution KV call limit.
+      await Promise.all(cleanIds.map(id => deleteKey(keyStyle(id))));
+      return { deleted_count: cleanIds.length, deleted_ids: cleanIds };
+    },
+    async cleanupStylesIndex(ids = []) {
+      const cleanIds = Array.from(new Set((Array.isArray(ids) ? ids : [])
+        .map(value => String(value || '').trim())
+        .filter(Boolean)));
+      if (!cleanIds.length) return { cleaned_count: 0, cleaned_ids: [] };
+
+      return queueIndexUpdate('styles', async () => {
+        const current = await mergeIndexSnapshots('styles');
+        const deletedSet = new Set(cleanIds);
+        const next = current.filter(item => !deletedSet.has(String(item)));
+        await setIndex('styles', next);
+        indexSnapshotCache.set('styles', { ids: [...next], at: Date.now() });
+        return { cleaned_count: cleanIds.length, cleaned_ids: cleanIds };
+      });
+    },
     async deleteStyle(id) {
       const cleanId = String(id || '').trim();
       if (!cleanId) throw new Error('款式不存在');
@@ -1352,11 +1385,8 @@ function createKVStorage(env) {
       const old = await getStyleById(cleanId);
       if (!old) throw new Error('款式不存在');
 
-      // Hard-delete both the style record and its index membership. Index
-      // updates merge several snapshots first to reduce stale-POP overwrite
-      // risk while keeping product_review_styles_index clean.
-      await deleteKey(keyStyle(cleanId));
-      await removeIndexIdSafely('styles', cleanId);
+      await this.deleteStyleKeys([cleanId]);
+      await this.cleanupStylesIndex([cleanId]);
       return true;
     },
     async createScore(data) {
@@ -1753,33 +1783,44 @@ function createKVStorage(env) {
       await putJson(keyReviewLink(cleanCode), row);
       return attachReviewLinkStatus(row);
     },
-    async deleteReviewLinksBatch(codes = []) {
+    async deleteReviewLinkKeys(codes = []) {
       const cleanCodes = Array.from(new Set((Array.isArray(codes) ? codes : [])
         .map(normalizeReviewLinkCode)
         .filter(Boolean)));
       if (!cleanCodes.length) return { deleted_count: 0, deleted_codes: [] };
       if (cleanCodes.length > 5) {
-        const error = new Error('ESA EdgeKV 单次最多删除 5 个评分链接，请分批删除');
+        const error = new Error('ESA EdgeKV 单个删除工作请求最多处理 5 个评分链接');
         error.status = 400;
         throw error;
       }
 
-      // ESA has a hard limit of 8 KV fetch calls per function execution.
-      // One batch of 5 links costs at most 7 normal calls:
-      //   1 GET review-links_index + 5 DELETE link keys + 1 PUT index.
-      // Serialize the index mutation so all deleted codes are removed with a
-      // single index rewrite instead of one GET/PUT pair per link.
+      // Physical deletion only. Multiple requests may execute this phase in
+      // parallel because they never mutate review_links_index.
+      await Promise.all(cleanCodes.map(code => deleteKey(keyReviewLink(code))));
+      return { deleted_count: cleanCodes.length, deleted_codes: cleanCodes };
+    },
+    async cleanupReviewLinksIndex(codes = []) {
+      const cleanCodes = Array.from(new Set((Array.isArray(codes) ? codes : [])
+        .map(normalizeReviewLinkCode)
+        .filter(Boolean)));
+      if (!cleanCodes.length) return { cleaned_count: 0, cleaned_codes: [] };
+
+      // One dedicated request performs the shared-index mutation after every
+      // parallel delete worker has finished. This prevents concurrent GET/PUT
+      // races from re-introducing codes that another worker already deleted.
       return queueIndexUpdate('review-links', async () => {
         const ids = await mergeIndexSnapshots('review-links');
-        for (const code of cleanCodes) {
-          await deleteKey(keyReviewLink(code));
-        }
         const deletedSet = new Set(cleanCodes);
         const next = ids.filter(item => !deletedSet.has(String(item)));
         await setIndex('review-links', next);
         indexSnapshotCache.set('review-links', { ids: [...next], at: Date.now() });
-        return { deleted_count: cleanCodes.length, deleted_codes: cleanCodes };
+        return { cleaned_count: cleanCodes.length, cleaned_codes: cleanCodes };
       });
+    },
+    async deleteReviewLinksBatch(codes = []) {
+      const physical = await this.deleteReviewLinkKeys(codes);
+      await this.cleanupReviewLinksIndex(physical.deleted_codes);
+      return physical;
     },
     async deleteReviewLink(code) {
       const cleanCode = normalizeReviewLinkCode(code);

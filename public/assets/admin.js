@@ -1,5 +1,5 @@
 console.info('[product-review] admin ESA fast-access v6 loaded');
-console.info("product-review admin version: 20260914-esa-fast-access-v6");
+console.info("product-review admin version: 20260914-esa-parallel-delete-v7");
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
@@ -201,6 +201,61 @@ function setButtonBusy(button, busy, text = '处理中...') {
     button.classList.remove('is-busy');
     delete button.dataset.originalText;
   }
+}
+
+const ESA_DELETE_BATCH_SIZE = 5;
+const ESA_DELETE_CONCURRENCY = 3;
+
+function splitIntoChunks(items, size = ESA_DELETE_BATCH_SIZE) {
+  const list = Array.isArray(items) ? items : [];
+  const chunks = [];
+  for (let i = 0; i < list.length; i += size) chunks.push(list.slice(i, i + size));
+  return chunks;
+}
+
+async function runControlledDeleteWorkers(items, worker, options = {}) {
+  const chunks = splitIntoChunks(items, options.batchSize || ESA_DELETE_BATCH_SIZE);
+  const concurrency = Math.max(1, Math.min(Number(options.concurrency || ESA_DELETE_CONCURRENCY), chunks.length || 1));
+  let cursor = 0;
+  let completedItems = 0;
+  const successful = [];
+  const failures = [];
+
+  async function runner() {
+    while (true) {
+      const index = cursor++;
+      if (index >= chunks.length) return;
+      const chunk = chunks[index];
+      try {
+        const result = await worker(chunk, index);
+        successful.push({ chunk, result });
+        completedItems += chunk.length;
+        options.onProgress?.(completedItems, items.length);
+      } catch (error) {
+        failures.push({ chunk, error });
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: concurrency }, () => runner()));
+  return { successful, failures };
+}
+
+async function cleanupIndexWithRetry(url, body, attempts = 2) {
+  let lastError = null;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      return await requestJson(url, {
+        method: 'DELETE',
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+        body: JSON.stringify(body)
+      });
+    } catch (error) {
+      lastError = error;
+      if (i + 1 < attempts) await new Promise(resolve => window.setTimeout(resolve, 300));
+    }
+  }
+  throw lastError || new Error('索引清理失败');
 }
 document.addEventListener('click', (event) => {
   const control = event.target.closest('button, a.ghost');
@@ -2834,31 +2889,63 @@ if (deleteAllStylesBtn) {
     const confirmed = await showConfirmDialog({
       title: '删除选中款式？',
       message: '确定删除当前勾选的已配置款式吗？',
-      details: [`本次将删除 ${count} 个款式。`, '删除后不可恢复，前端评分页也不会再显示这些款式。', '对应的七牛云/OSS 图片也会尝试同步清理。'],
+      details: [`本次将删除 ${count} 个款式。`, '采用 3 路并发分批删除，每个请求最多处理 5 个 KV。', '删除后不可恢复，对应七牛云/OSS 图片也会尝试同步清理。'],
       confirmText: '确认删除',
       cancelText: '取消',
       danger: true,
       icon: '删'
     });
     if (!confirmed) return;
-    setButtonBusy(event.currentTarget, true, '删除中...');
+
+    const button = event.currentTarget;
+    setButtonBusy(button, true, `删除中 0/${count}...`);
     try {
-      const data = await requestJson('/api/styles/delete-all', {
-        method: 'DELETE',
-        headers: { 'content-type': 'application/json; charset=utf-8' },
-        body: JSON.stringify({ ids })
+      const items = selectedRows.length
+        ? selectedRows.map(row => ({ id: String(row.id), product_image: String(row.product_image || '') }))
+        : ids.map(id => ({ id, product_image: '' }));
+      const result = await runControlledDeleteWorkers(items, async (chunk) => {
+        return requestJson('/api/styles/delete-all', {
+          method: 'DELETE',
+          headers: { 'content-type': 'application/json; charset=utf-8' },
+          body: JSON.stringify({ phase: 'keys', items: chunk })
+        });
+      }, {
+        onProgress: (done, total) => setButtonBusy(button, true, `删除中 ${done}/${total}...`)
       });
-      const deletedIds = new Set((data.deleted_ids || ids).map(String));
-      styles = styles.filter(item => !deletedIds.has(String(item.id)));
+
+      const deletedIds = Array.from(new Set(result.successful.flatMap(entry =>
+        (entry.result?.deleted_ids || entry.chunk.map(item => item.id)).map(String)
+      )));
+
+      let indexCleanupError = null;
+      if (deletedIds.length) {
+        setButtonBusy(button, true, '清理索引...');
+        try {
+          await cleanupIndexWithRetry('/api/styles/delete-all', { phase: 'index', ids: deletedIds });
+        } catch (error) {
+          indexCleanupError = error;
+        }
+      }
+
+      const deletedSet = new Set(deletedIds);
+      styles = styles.filter(item => !deletedSet.has(String(item.id)));
       deletedIds.forEach(id => selectedStyleIds.delete(id));
       inlineEditingStyleId = null;
       resetStyleForm();
       renderStyles();
-      showMessage(`已删除 ${data.deleted_count ?? count} 个款式。`);
+
+      const failedCount = result.failures.reduce((sum, entry) => sum + entry.chunk.length, 0);
+      if (indexCleanupError) {
+        showMessage(`已物理删除 ${deletedIds.length} 个款式，但索引清理失败：${indexCleanupError.message}`, 'error');
+      } else if (failedCount) {
+        showMessage(`已删除 ${deletedIds.length} 个款式，${failedCount} 个删除失败，请重试。`, 'error');
+      } else {
+        showMessage(`已删除 ${deletedIds.length} 个款式。`);
+      }
     } catch (e) {
       showMessage(e.message || '删除选中款式失败', 'error');
     } finally {
-      setButtonBusy(event.currentTarget, false);
+      setButtonBusy(button, false);
     }
   });
 }
@@ -3013,41 +3100,62 @@ if (deleteSelectedReviewLinksBtn) {
     const confirmed = await showConfirmDialog({
       title: '删除选中评分链接？',
       message: `确定删除选中的 ${codes.length} 个评分链接吗？`,
-      details: ['删除后这些链接将无法继续访问。', '已经提交的评分结果不会被删除。'],
+      details: ['采用 3 路并发分批删除，每个请求最多删除 5 个 KV。', '物理 Key 全部删除完成后，再由单独请求统一清理 review_links_index。', '已经提交的评分结果不会被删除。'],
       confirmText: '确认删除',
       cancelText: '取消',
       danger: true,
       icon: '删'
     });
     if (!confirmed) return;
-    setButtonBusy(event.currentTarget, true, '删除中...');
+
+    const button = event.currentTarget;
+    setButtonBusy(button, true, `删除中 0/${codes.length}...`);
     try {
-      // ESA EdgeKV allows only 8 KV calls per function execution. Delete at
-      // most 5 links in each HTTP request so the server can hard-delete all
-      // link keys and rewrite review_links_index without exceeding the limit.
-      const deletedList = [];
-      for (let i = 0; i < codes.length; i += 5) {
-        const chunk = codes.slice(i, i + 5);
-        const data = await requestJson('/api/review-links/delete-selected', {
+      const result = await runControlledDeleteWorkers(codes, async (chunk) => {
+        return requestJson('/api/review-links/delete-selected', {
           method: 'DELETE',
           headers: { 'content-type': 'application/json; charset=utf-8' },
-          body: JSON.stringify({ codes: chunk })
+          body: JSON.stringify({ phase: 'keys', codes: chunk })
         });
-        deletedList.push(...(data.deleted_codes || chunk).map(String));
+      }, {
+        onProgress: (done, total) => setButtonBusy(button, true, `删除中 ${done}/${total}...`)
+      });
+
+      const deletedList = Array.from(new Set(result.successful.flatMap(entry =>
+        (entry.result?.deleted_codes || entry.chunk).map(String)
+      )));
+
+      let indexCleanupError = null;
+      if (deletedList.length) {
+        setButtonBusy(button, true, '清理索引...');
+        try {
+          await cleanupIndexWithRetry('/api/review-links/delete-selected', { phase: 'index', codes: deletedList });
+        } catch (error) {
+          indexCleanupError = error;
+        }
       }
+
       const deletedCodes = new Set(deletedList);
       forgetRecentReviewLinks(Array.from(deletedCodes));
       reviewLinks = reviewLinks.filter(item => !deletedCodes.has(String(item.code)));
-      selectedReviewLinkCodes.clear();
+      selectedReviewLinkCodes = new Set(Array.from(selectedReviewLinkCodes).filter(code => !deletedCodes.has(String(code))));
       reviewLinksLoadedAt = Date.now();
       renderReviewLinks();
       updateScoreLinkFilterOptions();
       if (scores.length) renderScores();
-      showMessage(`已删除 ${deletedCodes.size} 个评分链接。`);
+
+      const failedCount = result.failures.reduce((sum, entry) => sum + entry.chunk.length, 0);
+      if (indexCleanupError) {
+        showMessage(`已物理删除 ${deletedCodes.size} 个评分链接，但索引清理失败：${indexCleanupError.message}`, 'error');
+      } else if (failedCount) {
+        showMessage(`已删除 ${deletedCodes.size} 个评分链接，${failedCount} 个删除失败，请重试。`, 'error');
+      } else {
+        showMessage(`已删除 ${deletedCodes.size} 个评分链接。`);
+      }
     } catch (e) {
       showMessage(e.message || '删除选中评分链接失败', 'error');
     } finally {
-      setButtonBusy(event.currentTarget, false);
+      setButtonBusy(button, false);
     }
   });
 }

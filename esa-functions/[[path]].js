@@ -294,7 +294,7 @@ function adminHtml(adminPath, sessionIdleMinutes) {
     </section>
   </main>
   <script>window.__ADMIN_PATH__ = ${JSON.stringify(adminPath)}; window.__SESSION_IDLE_MINUTES__ = ${JSON.stringify(sessionIdleMinutes)};</script>
-  <script src="/assets/admin.js?v=20260914-esa-fast-access-v6" defer></script>
+  <script src="/assets/admin.js?v=20260914-esa-parallel-delete-v7" defer></script>
 </body>
 </html>`;
 }
