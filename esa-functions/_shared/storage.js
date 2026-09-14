@@ -1067,6 +1067,7 @@ function createKVStorage(env) {
   const keyDraft = (reviewer, date = dateInTimezone(env), linkCode = '') => key(`draft:${date}:${hashText(normalizeDraftReviewer(reviewer))}:${hashText(normalizeReviewLinkCode(linkCode) || 'all')}`);
   const keySubmissionDay = (reviewer, date = beijingDate(), reviewLinkCode = '') => key(`submission-day:${date}:${hashText(normalizeReviewerName(reviewer))}:${hashText(normalizeReviewLinkCode(reviewLinkCode) || 'all')}`);
   const keyReviewLink = (code) => key(`review-link:${normalizeReviewLinkCode(code)}`);
+  const usePackedScores = String(env.ESA_COMPACT_SCORE_INDEX ?? '1').trim() !== '0';
 
   async function getJson(k, fallback) {
     const value = await kv.get(k, { type: 'json' });
@@ -1175,8 +1176,80 @@ function createKVStorage(env) {
   async function getScoreTypesSetting() { const s = await getSettings(); return normalizeScoreTypes(s.score_types || DEFAULT_SCORE_TYPES); }
   async function getGradeRulesSetting() { const s = await getSettings(); return normalizeGradeRules(s.score_grade_rules || s.grade_rules || DEFAULT_GRADE_RULES); }
   async function getStyleById(id) { return id ? getJson(keyStyle(String(id)), null) : null; }
+  let packedScoreIndexLoaded = false;
+  let packedScoreIndexEntries = [];
+
+  function isPackedScoreRow(value) {
+    return !!value && typeof value === 'object' && !Array.isArray(value) && !!String(value.id || '').trim();
+  }
+
+  async function getPackedScoreIndexEntries() {
+    if (packedScoreIndexLoaded) return packedScoreIndexEntries;
+    const value = await getJson(key('scores:index'), []);
+    packedScoreIndexEntries = Array.isArray(value) ? value : [];
+    packedScoreIndexLoaded = true;
+    return packedScoreIndexEntries;
+  }
+
+  async function setPackedScoreIndexEntries(entries) {
+    const normalized = Array.isArray(entries) ? entries : [];
+    const json = JSON.stringify(normalized);
+    const byteLength = typeof TextEncoder === 'function' ? new TextEncoder().encode(json).byteLength : json.length;
+    if (byteLength > 1_650_000) {
+      const error = new Error('评分数据已接近 ESA EdgeKV 单 Key 容量上限，请改用数据库或外部存储后再继续提交。');
+      error.status = 507;
+      throw error;
+    }
+    await putJson(key('scores:index'), normalized);
+    packedScoreIndexEntries = normalized;
+    packedScoreIndexLoaded = true;
+  }
+
+  async function materializePackedScoreRows({ migrateLegacy = true, maxLegacyReads = 5 } = {}) {
+    const entries = await getPackedScoreIndexEntries();
+    const rows = [];
+    const nextEntries = [...entries];
+    let legacyReads = 0;
+    let changed = false;
+
+    for (let i = 0; i < entries.length; i += 1) {
+      const entry = entries[i];
+      if (isPackedScoreRow(entry)) {
+        if (!entry.deleted_at) rows.push(attachScoreItems(entry, DEFAULT_SCORE_FIELDS));
+        continue;
+      }
+      const legacyId = String(entry || '').trim();
+      if (!legacyId || legacyReads >= maxLegacyReads) continue;
+      legacyReads += 1;
+      const legacyRow = await getJson(keyScore(legacyId), null);
+      if (legacyRow && !legacyRow.deleted_at) {
+        const packed = attachScoreItems(legacyRow, DEFAULT_SCORE_FIELDS);
+        rows.push(packed);
+        if (migrateLegacy) { nextEntries[i] = packed; changed = true; }
+      } else if (migrateLegacy) {
+        nextEntries[i] = null;
+        changed = true;
+      }
+    }
+
+    if (migrateLegacy && changed) await setPackedScoreIndexEntries(nextEntries.filter(Boolean));
+    return rows;
+  }
+
   async function getScoreById(id) {
-    const row = id ? await getJson(keyScore(String(id)), null) : null;
+    const cleanId = String(id || '').trim();
+    if (!cleanId) return null;
+    if (usePackedScores) {
+      const entries = await getPackedScoreIndexEntries();
+      const direct = entries.find(entry => isPackedScoreRow(entry) && String(entry.id) === cleanId);
+      if (direct) return direct.deleted_at ? null : attachScoreItems(direct, DEFAULT_SCORE_FIELDS);
+      if (entries.some(entry => !isPackedScoreRow(entry) && String(entry || '') === cleanId)) {
+        const legacy = await getJson(keyScore(cleanId), null);
+        return legacy && !legacy.deleted_at ? attachScoreItems(legacy, DEFAULT_SCORE_FIELDS) : null;
+      }
+      return null;
+    }
+    const row = await getJson(keyScore(cleanId), null);
     return attachScoreItems(row, await getScoreFields());
   }
   async function getScoreFields() {
@@ -1194,6 +1267,25 @@ function createKVStorage(env) {
     const date = String(reviewDate || '');
     const cleanLinkCode = normalizeReviewLinkCode(reviewLinkCode);
     if (!name || !date) return;
+
+    if (usePackedScores) {
+      const entries = await getPackedScoreIndexEntries();
+      const row = entries.find(item => isPackedScoreRow(item) && !item.deleted_at
+        && normalizeReviewerName(item.reviewer) === name
+        && String(item.review_date || '') === date
+        && (!cleanLinkCode || normalizeReviewLinkCode(item.review_link_code) === cleanLinkCode));
+      if (row) {
+        await putJson(keySubmissionDay(name, date, cleanLinkCode), {
+          reviewer: row.reviewer, review_date: row.review_date, submission_id: row.submission_id || '',
+          submitted_at: row.submitted_at || row.created_at || '',
+          review_link_code: normalizeReviewLinkCode(row.review_link_code || cleanLinkCode)
+        }, { expirationTtl: Math.max(60, 48 * 60 * 60) });
+      } else {
+        await deleteKey(keySubmissionDay(name, date, cleanLinkCode));
+      }
+      return;
+    }
+
     const ids = await getIndex('scores');
     for (const scoreId of ids) {
       const row = await getScoreById(scoreId);
@@ -1271,9 +1363,8 @@ function createKVStorage(env) {
       const style = await getStyleById(data.style_id);
       if (!style || style.deleted_at || Number(style.active ?? 1) !== 1) throw new Error('该款式不存在或未启用评分');
       const id = crypto.randomUUID();
-      const row = {
-        id,
-        ...data,
+      const row = attachScoreItems({
+        id, ...data,
         submission_id: data.submission_id || newSubmissionId(),
         submitted_at: data.submitted_at || nowDateTime(),
         style_id: style.id,
@@ -1282,7 +1373,12 @@ function createKVStorage(env) {
         season: data.season || style.season || '',
         base_price: Object.prototype.hasOwnProperty.call(data, 'base_price') && data.base_price !== undefined ? data.base_price : style.base_price,
         created_at: now(), updated_at: now(), deleted_at: null
-      };
+      }, DEFAULT_SCORE_FIELDS);
+      if (usePackedScores) {
+        const entries = await getPackedScoreIndexEntries();
+        await setPackedScoreIndexEntries([row, ...entries]);
+        return row;
+      }
       await putJson(keyScore(id), row);
       const ids = await getIndex('scores');
       await setIndex('scores', [id, ...ids]);
@@ -1290,20 +1386,26 @@ function createKVStorage(env) {
       return attachScoreItems(row, await getScoreFields());
     },
     async listScores(filters = {}) {
-      const ids = await getIndex('scores');
       const keyword = String(filters.search || '').trim().toLowerCase();
       const dateFrom = String(filters.date_from || '');
       const dateTo = String(filters.date_to || '');
       const reviewLinkCode = normalizeReviewLinkCode(filters.review_link_code || filters.reviewLinkCode || '');
-      const fields = await getScoreFields();
-      const rows = (await Promise.all(ids.map(getScoreById))).filter(row => row && !row.deleted_at);
+      const limit = Math.max(1, Math.min(10000, Number.parseInt(filters.limit || '1000', 10) || 1000));
+      let rows;
+      if (usePackedScores) {
+        rows = await materializePackedScoreRows({ migrateLegacy: true, maxLegacyReads: 5 });
+      } else {
+        const ids = await getIndex('scores');
+        const fields = await getScoreFields();
+        rows = (await Promise.all(ids.map(getScoreById))).filter(row => row && !row.deleted_at).map(row => attachScoreItems(row, fields));
+      }
       return rows
-        .map(row => attachScoreItems(row, fields))
         .filter(row => !keyword || [row.style_code, row.season, row.reviewer, row.remark, row.review_link_code].some(v => String(v || '').toLowerCase().includes(keyword)))
         .filter(row => !reviewLinkCode || String(row.review_link_code || '') === reviewLinkCode)
         .filter(row => !dateFrom || String(row.review_date || '') >= dateFrom)
         .filter(row => !dateTo || String(row.review_date || '') <= dateTo)
-        .sort((a, b) => String(b.review_date || '').localeCompare(String(a.review_date || '')) || String(b.created_at || '').localeCompare(String(a.created_at || '')));
+        .sort((a, b) => String(b.review_date || '').localeCompare(String(a.review_date || '')) || String(b.created_at || '').localeCompare(String(a.created_at || '')))
+        .slice(0, limit);
     },
     async getDailySubmission(reviewer, reviewDate, reviewLinkCode = '') {
       const name = normalizeReviewerName(reviewer);
@@ -1313,27 +1415,26 @@ function createKVStorage(env) {
       const marker = await getJson(keySubmissionDay(name, date, cleanLinkCode), null);
       if (marker && marker.reviewer && String(marker.review_date || '') === date
         && (!cleanLinkCode || normalizeReviewLinkCode(marker.review_link_code) === cleanLinkCode)) return marker;
+      if (usePackedScores) {
+        const entries = await getPackedScoreIndexEntries();
+        const row = entries.find(item => isPackedScoreRow(item) && !item.deleted_at
+          && normalizeReviewerName(item.reviewer) === name
+          && String(item.review_date || '') === date
+          && (!cleanLinkCode || normalizeReviewLinkCode(item.review_link_code) === cleanLinkCode));
+        if (!row) return null;
+        return { reviewer: row.reviewer, review_date: row.review_date, submission_id: row.submission_id || '', submitted_at: row.submitted_at || row.created_at || '', review_link_code: normalizeReviewLinkCode(row.review_link_code || cleanLinkCode) };
+      }
       const ids = await getIndex('scores');
       for (const id of ids) {
         const row = await getScoreById(id);
-        if (row && !row.deleted_at
-          && normalizeReviewerName(row.reviewer) === name
-          && String(row.review_date || '') === date
-          && (!cleanLinkCode || normalizeReviewLinkCode(row.review_link_code) === cleanLinkCode)) {
-          const found = {
-            reviewer: row.reviewer,
-            review_date: row.review_date,
-            submission_id: row.submission_id || '',
-            submitted_at: row.submitted_at || row.created_at || '',
-            review_link_code: normalizeReviewLinkCode(row.review_link_code || cleanLinkCode)
-          };
+        if (row && !row.deleted_at && normalizeReviewerName(row.reviewer) === name && String(row.review_date || '') === date && (!cleanLinkCode || normalizeReviewLinkCode(row.review_link_code) === cleanLinkCode)) {
+          const found = { reviewer: row.reviewer, review_date: row.review_date, submission_id: row.submission_id || '', submitted_at: row.submitted_at || row.created_at || '', review_link_code: normalizeReviewLinkCode(row.review_link_code || cleanLinkCode) };
           await putJson(keySubmissionDay(name, date, cleanLinkCode), found, { expirationTtl: secondsUntilNextLocalDay(env) });
           return found;
         }
       }
       return null;
     },
-
     async createScoresBatch(items = [], meta = {}) {
       const normalizedItems = Array.isArray(items) ? items : [];
       if (!normalizedItems.length) return [];
@@ -1341,102 +1442,81 @@ function createKVStorage(env) {
       const reviewDate = String(meta.review_date || normalizedItems[0]?.review_date || beijingDate());
       if (!meta.skip_duplicate_check) {
         const existing = await this.getDailySubmission(reviewerName, reviewDate, meta.review_link_code || meta.reviewLinkCode || normalizedItems[0]?.review_link_code || '');
-        if (existing) {
-          const error = new Error(`${reviewerName} 今天已经通过该评分链接提交过评分，不能重复提交。`);
-          error.status = 409;
-          throw error;
-        }
+        if (existing) { const error = new Error(`${reviewerName} 今天已经通过该评分链接提交过评分，不能重复提交。`); error.status = 409; throw error; }
       }
       const fields = await getScoreFields();
-      const uniqueStyleIds = Array.from(new Set(normalizedItems.map(item => String(item.style_id))));
-      const styleRows = await Promise.all(uniqueStyleIds.map(id => getStyleById(id)));
-      const styleById = new Map();
-      styleRows.forEach(style => { if (style) styleById.set(String(style.id), style); });
       const submissionId = String(meta.submission_id || normalizedItems[0]?.submission_id || newSubmissionId());
       const submittedAt = String(meta.submitted_at || normalizedItems[0]?.submitted_at || beijingDateTime());
       const reviewLinkCode = normalizeReviewLinkCode(meta.review_link_code || meta.reviewLinkCode || normalizedItems[0]?.review_link_code || '');
+      if (usePackedScores) {
+        const rows = normalizedItems.map((data) => attachScoreItems({
+          id: crypto.randomUUID(), ...data,
+          reviewer: reviewerName, review_date: reviewDate, submission_id: submissionId, submitted_at: submittedAt,
+          review_link_code: normalizeReviewLinkCode(data.review_link_code || reviewLinkCode),
+          style_id: String(data.style_id || ''), product_image: String(data.product_image || ''), style_code: String(data.style_code || ''), season: String(data.season || ''),
+          base_price: Object.prototype.hasOwnProperty.call(data, 'base_price') ? data.base_price : undefined,
+          created_at: submittedAt, updated_at: submittedAt, deleted_at: null
+        }, fields));
+        const entries = await getPackedScoreIndexEntries();
+        await setPackedScoreIndexEntries([...rows, ...entries]);
+        await putJson(keySubmissionDay(reviewerName, reviewDate, reviewLinkCode), { reviewer: reviewerName, review_date: reviewDate, submission_id: submissionId, submitted_at: submittedAt, review_link_code: reviewLinkCode }, { expirationTtl: Math.max(60, 48 * 60 * 60) });
+        return rows;
+      }
+      const uniqueStyleIds = Array.from(new Set(normalizedItems.map(item => String(item.style_id))));
+      const styleRows = await Promise.all(uniqueStyleIds.map(id => getStyleById(id)));
+      const styleById = new Map(); styleRows.forEach(style => { if (style) styleById.set(String(style.id), style); });
       const rows = normalizedItems.map((data) => {
         const style = styleById.get(String(data.style_id));
         if (!style || style.deleted_at || Number(style.active ?? 1) !== 1) throw new Error('该款式不存在或未启用评分');
-        const id = crypto.randomUUID();
-        return attachScoreItems({
-          id,
-          ...data,
-          reviewer: reviewerName,
-          review_date: reviewDate,
-          submission_id: submissionId,
-          submitted_at: submittedAt,
-          review_link_code: normalizeReviewLinkCode(data.review_link_code || reviewLinkCode),
-          style_id: style.id,
-          product_image: data.product_image || style.product_image || '',
-          style_code: data.style_code || style.style_code,
-          season: data.season || style.season || '',
-          base_price: Object.prototype.hasOwnProperty.call(data, 'base_price') && data.base_price !== undefined ? data.base_price : style.base_price,
-          created_at: submittedAt,
-          updated_at: submittedAt,
-          deleted_at: null
-        }, fields);
+        return attachScoreItems({ id: crypto.randomUUID(), ...data, reviewer: reviewerName, review_date: reviewDate, submission_id: submissionId, submitted_at: submittedAt, review_link_code: normalizeReviewLinkCode(data.review_link_code || reviewLinkCode), style_id: style.id, product_image: data.product_image || style.product_image || '', style_code: data.style_code || style.style_code, season: data.season || style.season || '', base_price: Object.prototype.hasOwnProperty.call(data, 'base_price') && data.base_price !== undefined ? data.base_price : style.base_price, created_at: submittedAt, updated_at: submittedAt, deleted_at: null }, fields);
       });
-      await putJson(keySubmissionDay(reviewerName, reviewDate, reviewLinkCode), {
-        reviewer: reviewerName,
-        review_date: reviewDate,
-        submission_id: submissionId,
-        submitted_at: submittedAt,
-        review_link_code: reviewLinkCode
-      }, { expirationTtl: Math.max(60, 48 * 60 * 60) });
+      await putJson(keySubmissionDay(reviewerName, reviewDate, reviewLinkCode), { reviewer: reviewerName, review_date: reviewDate, submission_id: submissionId, submitted_at: submittedAt, review_link_code: reviewLinkCode }, { expirationTtl: Math.max(60, 48 * 60 * 60) });
       const ids = await getIndex('scores');
       await Promise.all(rows.map(row => putJson(keyScore(row.id), row)));
       await setIndex('scores', [...rows.map(row => row.id), ...ids]);
       await Promise.all(rows.map(row => addScoreHistory(row.id, 'create', row)));
       return rows;
     },
-
     async updateScore(id, data) {
       const old = await getScoreById(id);
       if (!old || old.deleted_at) throw new Error('评分记录不存在');
       const style = await getStyleById(data.style_id || old.style_id);
       if (!style) throw new Error('关联款式不存在');
-      const row = {
-        ...old,
-        ...data,
-        style_id: style.id,
-        product_image: data.product_image || old.product_image || style.product_image || '',
-        style_code: data.style_code || old.style_code || style.style_code,
-        season: Object.prototype.hasOwnProperty.call(data, 'season') && data.season !== '' ? data.season : (old.season || style.season || ''),
-        base_price: Object.prototype.hasOwnProperty.call(data, 'base_price') && data.base_price !== undefined ? data.base_price : (old.base_price ?? style.base_price),
-        updated_at: now()
-      };
-      await putJson(keyScore(String(id)), row);
-      await addScoreHistory(id, 'update', { before: old, after: row });
-      return attachScoreItems(row, await getScoreFields());
+      const row = { ...old, ...data, style_id: style.id, product_image: data.product_image || old.product_image || style.product_image || '', style_code: data.style_code || old.style_code || style.style_code, season: Object.prototype.hasOwnProperty.call(data, 'season') && data.season !== '' ? data.season : (old.season || style.season || ''), base_price: Object.prototype.hasOwnProperty.call(data, 'base_price') && data.base_price !== undefined ? data.base_price : (old.base_price ?? style.base_price), updated_at: now() };
+      if (usePackedScores) { const entries = await getPackedScoreIndexEntries(); await setPackedScoreIndexEntries(entries.map(entry => isPackedScoreRow(entry) && String(entry.id) === String(id) ? row : entry)); return attachScoreItems(row, DEFAULT_SCORE_FIELDS); }
+      await putJson(keyScore(String(id)), row); await addScoreHistory(id, 'update', { before: old, after: row }); return attachScoreItems(row, await getScoreFields());
     },
     async deleteScore(id) {
-      const old = await getScoreById(id);
-      if (!old || old.deleted_at) throw new Error('评分记录不存在');
-      await putJson(keyScore(String(id)), { ...old, deleted_at: now(), updated_at: now() });
-      await addScoreHistory(id, 'delete', old);
-      await refreshDailySubmissionMarker(old.reviewer, old.review_date, old.review_link_code || '');
-      return true;
+      const cleanId = String(id || '').trim();
+      if (usePackedScores) {
+        const entries = await getPackedScoreIndexEntries();
+        const old = entries.find(entry => isPackedScoreRow(entry) && String(entry.id) === cleanId);
+        if (old) { await setPackedScoreIndexEntries(entries.filter(entry => !(isPackedScoreRow(entry) && String(entry.id) === cleanId))); await refreshDailySubmissionMarker(old.reviewer, old.review_date, old.review_link_code || ''); return true; }
+      }
+      const old = await getScoreById(cleanId); if (!old || old.deleted_at) throw new Error('评分记录不存在');
+      await putJson(keyScore(cleanId), { ...old, deleted_at: now(), updated_at: now() }); await addScoreHistory(cleanId, 'delete', old); await refreshDailySubmissionMarker(old.reviewer, old.review_date, old.review_link_code || ''); return true;
     },
     async deleteScoresBatch(ids = []) {
-      const uniqueIds = Array.from(new Set((Array.isArray(ids) ? ids : []).map(String).filter(Boolean)));
-      if (!uniqueIds.length) return 0;
+      const uniqueIds = Array.from(new Set((Array.isArray(ids) ? ids : []).map(String).filter(Boolean))); if (!uniqueIds.length) return 0;
+      if (usePackedScores) {
+        const idSet = new Set(uniqueIds); const entries = await getPackedScoreIndexEntries();
+        const removed = entries.filter(entry => isPackedScoreRow(entry) && idSet.has(String(entry.id)) && !entry.deleted_at);
+        if (removed.length) {
+          await setPackedScoreIndexEntries(entries.filter(entry => !(isPackedScoreRow(entry) && idSet.has(String(entry.id)))));
+          const groups = new Map(); removed.forEach(row => { const g = `${normalizeReviewerName(row.reviewer)}::${row.review_date || ''}::${normalizeReviewLinkCode(row.review_link_code || '')}`; if (!groups.has(g)) groups.set(g, row); });
+          for (const row of Array.from(groups.values()).slice(0, 5)) await refreshDailySubmissionMarker(row.reviewer, row.review_date, row.review_link_code || '');
+        }
+        return removed.length;
+      }
       const rows = (await Promise.all(uniqueIds.map(getScoreById))).filter(row => row && !row.deleted_at);
-      await Promise.all(rows.map(async old => {
-        await Promise.all([
-          putJson(keyScore(String(old.id)), { ...old, deleted_at: now(), updated_at: now() }),
-          addScoreHistory(old.id, 'delete', old)
-        ]);
-      }));
-      const markerKeys = new Map();
-      rows.forEach(row => {
-        const key = `${normalizeReviewerName(row.reviewer)}::${row.review_date || ''}::${normalizeReviewLinkCode(row.review_link_code || '')}`;
-        if (!markerKeys.has(key)) markerKeys.set(key, row);
-      });
-      await Promise.all(Array.from(markerKeys.values()).map(row => refreshDailySubmissionMarker(row.reviewer, row.review_date, row.review_link_code || '')));
-      return rows.length;
+      await Promise.all(rows.map(async old => { await Promise.all([putJson(keyScore(String(old.id)), { ...old, deleted_at: now(), updated_at: now() }), addScoreHistory(old.id, 'delete', old)]); }));
+      const markerKeys = new Map(); rows.forEach(row => { const k = `${normalizeReviewerName(row.reviewer)}::${row.review_date || ''}::${normalizeReviewLinkCode(row.review_link_code || '')}`; if (!markerKeys.has(k)) markerKeys.set(k, row); });
+      await Promise.all(Array.from(markerKeys.values()).map(row => refreshDailySubmissionMarker(row.reviewer, row.review_date, row.review_link_code || ''))); return rows.length;
     },
-    async getScoreHistory(id) { return getJson(keyScoreHistory(String(id)), []); },
+    async getScoreHistory(id) {
+      if (usePackedScores) { const row = await getScoreById(id); if (row) return [{ id: `create_${row.id}`, score_id: row.id, action: 'create', snapshot_json: JSON.stringify(row), changed_at: row.created_at || row.submitted_at || now() }]; }
+      return getJson(keyScoreHistory(String(id)), []);
+    },
     async getScorePageCount() { const s = await getSettings(); return safeCount(s.score_page_count || '3', 3); },
     async setScorePageCount(count) { const s = await getSettings(); s.score_page_count = safeCount(count, 1); await setSettings(s); return s.score_page_count; },
     async getScoreTypes() { return getScoreTypesSetting(); },
@@ -1596,7 +1676,8 @@ function createEsaEdgeKVStorage(env) {
   return createKVStorage({
     ...env,
     KV: kvAdapter,
-    KV_PREFIX: env.KV_PREFIX || 'product-review_'
+    KV_PREFIX: env.KV_PREFIX || 'product-review_',
+    ESA_COMPACT_SCORE_INDEX: true
   });
 }
 
