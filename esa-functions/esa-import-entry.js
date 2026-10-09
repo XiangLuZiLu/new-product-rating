@@ -1,8 +1,8 @@
-// ESA-only lightweight adapter: keep original routing, authentication, and APIs.
-// Inject the import UI upgrade only on the admin HTML response.
+// ESA-only adapter: leave the existing router, authentication and APIs intact.
 import originalEntry from './index.js';
 
-const UI_SCRIPT = '/assets/esa-style-import-ui.js?v=20261009-safe-import-v2';
+// Update the cache version whenever the ESA-only import UI changes.
+const UI_SCRIPT = '/assets/esa-style-import-ui.js?v=20261009-visibility-v3';
 
 export default {
   async fetch(request, context, env = {}) {

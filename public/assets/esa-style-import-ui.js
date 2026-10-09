@@ -1,35 +1,37 @@
-/* ESA Pages / new-product-rating: fix HTTP 409 from old admin.js import payload.
- * Requires the existing ESA /api/styles/import supporting scan, write, commit.
- * No change to the Cloudflare / EdgeOne versions of the project.
+/* ESA Pages: batch style import + read-after-write visibility verification.
+ * Compatible with /api/styles/import modes scan, write and commit.
+ * Only loaded on the ESA admin page; Cloudflare and EdgeOne are unaffected.
  */
 (() => {
   'use strict';
+
   const API = '/api/styles/import';
-  const SCAN_SIZE = 6; // 1 index GET + up to 6 record GETs, stays under ESA 8-KV limit
-  const WRITE_SIZE = 3; // 3 GET + 3 PUT, stays under ESA 8-KV limit
+  const SCAN_SIZE = 6; // one index GET plus six style GETs = <= 7 calls
+  const WRITE_SIZE = 3; // each style one GET + one PUT = <= 6 calls
   const MAX_ROWS = 1000;
+  const VERIFY_TIMEOUT_MS = 5 * 60 * 1000;
   const SESSION_KEY = '__esaStyleImportBusy';
   let inProgress = false;
+  let pendingVerification = null;
+  let pendingVerificationModal = null;
 
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-  const norm = val => String(val ?? '').trim();
-  const codeKey = val => norm(val).toLowerCase();
-  const percent = (done, total, indexed) => total <= 0 ? 0 :
-    (indexed ? 100 : Math.min(99, Math.round((done / total) * 100)));
+  const norm = value => String(value ?? '').trim();
+  const codeKey = value => norm(value).toLowerCase();
+  const priceKey = value => (value === '' || value == null) ? '' : String(Number(value));
+  const percentage = (done, total, verified) => total < 1 ? 0 :
+    (verified ? 100 : Math.min(99, Math.round(done * 100 / total)));
 
   async function call(body) {
     const response = await fetch(API, {
-      method: 'POST',
-      credentials: 'include',
+      method: 'POST', credentials: 'include', cache: 'no-store',
       headers: { 'content-type': 'application/json; charset=utf-8' },
-      body: JSON.stringify(body),
-      cache: 'no-store'
+      body: JSON.stringify(body)
     });
     const data = await response.json().catch(() => null);
     if (!response.ok || data?.ok === false) {
-      const msg = data?.message || (response.status === 401
-        ? '后台登录已过期，请重新登录。' : `接口返回 HTTP ${response.status}`);
-      const error = new Error(msg);
+      const error = new Error(data?.message || (response.status === 401
+        ? '后台登录已过期，请重新登录' : `接口返回 HTTP ${response.status}`));
       error.status = response.status;
       throw error;
     }
@@ -38,63 +40,62 @@
 
   async function callWithRetry(body, maxAttempts = 3) {
     let lastError;
-    for (let n = 0; n < maxAttempts; n += 1) {
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       try { return await call(body); }
       catch (error) {
         lastError = error;
-        const message = error.message || '';
-        const propagation = error.status === 409 && /KV 同步|无法读取已有款式/.test(message);
-        const retryable = propagation || error.status === 503 || error.status === 502 ||
-          error.status === 504 || error.status === 429 || !error.status;
-        if (!retryable || n === maxAttempts - 1) break;
-        await sleep(450 * (2 ** n));
+        const isKvPropagation = error.status === 409 && /KV 同步|无法读取已有款式/.test(error.message || '');
+        const retryable = isKvPropagation || [429, 502, 503, 504].includes(error.status) || !error.status;
+        if (!retryable || attempt === maxAttempts - 1) break;
+        await sleep(450 * (2 ** attempt));
       }
     }
     throw lastError;
   }
 
-  // IMPORTANT: a new request gets a new eight-call budget. Each scan page is 1 + 6 calls.
   async function scanAll(onPage = () => {}) {
-    const found = [];
     let offset = 0;
     let total = null;
+    const rows = [];
     for (let page = 0; page < 10000; page += 1) {
       const data = await callWithRetry({ mode: 'scan', offset, limit: SCAN_SIZE });
       if (data.mode !== 'scan' || !Number.isInteger(data.total) ||
           !Number.isInteger(data.next_offset) || data.total < 0 ||
           (total !== null && total !== data.total)) {
-        throw new Error('款式索引分页不一致，停止导入以防止覆盖错误数据。请稍后重试。');
+        throw new Error('款式索引分页前后不一致，稍后重新检查');
       }
       total = data.total;
-      const next = data.next_offset;
-      if (next <= offset && offset < total) throw new Error('读取款式索引时分页未推进');
-      found.push(...(Array.isArray(data.rows) ? data.rows : []));
-      onPage(Math.min(next, total), total);
-      offset = next;
-      if (offset >= total) return found;
+      if (data.next_offset <= offset && offset < total) {
+        throw new Error('款式索引分页没有继续推进');
+      }
+      rows.push(...(Array.isArray(data.rows) ? data.rows : []));
+      offset = data.next_offset;
+      onPage(Math.min(offset, total), total);
+      if (offset >= total) return rows;
     }
-    throw new Error('款式数量超过分页保护上限，请联系管理员');
+    throw new Error('款式索引超过分页保护上限');
   }
 
-  function collectRows(source, oldRows) {
-    const existing = new Map();
-    for (const row of oldRows) if (row?.id && row.style_code && !row.deleted_at)
-      existing.set(codeKey(row.style_code), row);
-    const input = new Map();
+  function collectRows(source, existingRows) {
+    const existingByCode = new Map();
+    for (const row of existingRows) {
+      if (row?.id && row.style_code && !row.deleted_at) existingByCode.set(codeKey(row.style_code), row);
+    }
+    const unique = new Map();
     let skipped = 0;
     for (const row of source) {
       const style_code = norm(row?.style_code ?? row?.['款式编码'] ?? row?.code ?? row?.sku);
-      if (!style_code) { skipped++; continue; }
+      if (!style_code) { skipped += 1; continue; }
       const key = codeKey(style_code);
-      if (input.has(key)) skipped++;
-      input.set(key, {
+      if (unique.has(key)) skipped += 1;
+      unique.set(key, {
         style_code,
         season: norm(row?.season ?? row?.['季节']),
         base_price: norm(row?.base_price ?? row?.['基本售价'] ?? row?.price),
-        existing_id: norm(existing.get(key)?.id)
+        existing_id: norm(existingByCode.get(key)?.id)
       });
     }
-    const rows = Array.from(input.values());
+    const rows = Array.from(unique.values());
     if (!rows.length) throw new Error('没有可导入的有效款式');
     if (rows.length > MAX_ROWS) throw new Error(`一次最多导入 ${MAX_ROWS} 个款式`);
     return { rows, skipped };
@@ -135,19 +136,19 @@
         <div class="esa-error" data-esa-error></div>
       `;
       const panel = modal.querySelector('#styleImportModalPreview');
-      if (panel) { panel.after(root); }
+      if (panel) panel.after(root);
       else modal.querySelector('.confirm-body')?.append(root);
       root.prepend(css);
     }
     root.hidden = false;
     return {
-      render({ done = 0, total = 0, stage = '', detail = '', indexed = false, error = '' } = {}) {
-        const ratio = percent(done, total, indexed);
+      render({ done = 0, total = 0, stage = '', detail = '', verified = false, error = '' } = {}) {
+        const pct = percentage(done, total, verified);
         const circumference = 414.69;
-        root.querySelector('[data-esa-percent]').textContent = `${ratio}%`;
+        root.querySelector('[data-esa-percent]').textContent = `${pct}%`;
         root.querySelector('[data-esa-count]').textContent = `${done} / ${total} 款`;
         root.querySelector('.esa-current').setAttribute('stroke-dashoffset',
-          String((circumference * (1 - ratio / 100)).toFixed(2)));
+          String((circumference * (1 - pct / 100)).toFixed(2)));
         root.querySelector('[data-esa-stage]').textContent = stage;
         root.querySelector('[data-esa-detail]').textContent = detail;
         root.querySelector('[data-esa-error]').textContent = error;
@@ -155,12 +156,116 @@
     };
   }
 
+  function setPageStyles(rows) {
+    if (typeof styles === 'undefined' || typeof renderStyles !== 'function') return;
+    let keyword = '';
+    const form = document.querySelector('#styleSearchForm');
+    if (form) keyword = codeKey(new URLSearchParams(new FormData(form)).get('search'));
+    styles = rows
+      .filter(row => row && !row.deleted_at)
+      .filter(row => !keyword || [row.style_code, row.season, row.style_remark]
+        .some(value => codeKey(value).includes(keyword)))
+      .sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')) ||
+        String(a.id).localeCompare(String(b.id)));
+    renderStyles();
+  }
+
+  async function reloadStylesPaged() {
+    const rows = await scanAll();
+    setPageStyles(rows);
+  }
+
+  // Check all previously visible IDs still exist and every imported style has
+  // the expected ID, code, season, and base_price. A successful index PUT alone
+  // does NOT demonstrate read-after-write visibility in ESA EdgeKV.
+  function inspectVisibility(rows, ctx) {
+    const byId = new Map(rows.filter(row => row?.id).map(row => [String(row.id), row]));
+    let missingOld = 0;
+    for (const [id, expectedCode] of ctx.priorIds) {
+      const row = byId.get(id);
+      if (!row || codeKey(row.style_code) !== expectedCode) missingOld += 1;
+    }
+    let visible = 0;
+    for (const [id, target] of ctx.confirmedRows) {
+      const row = byId.get(id);
+      if (row && codeKey(row.style_code) === codeKey(target.style_code) &&
+          norm(row.season) === norm(target.season) &&
+          priceKey(row.base_price) === priceKey(target.base_price)) visible += 1;
+    }
+    return { visible, missingOld, total: ctx.confirmedRows.size,
+      complete: visible === ctx.confirmedRows.size && missingOld === 0 };
+  }
+
+  async function waitForVisibility(ctx, update) {
+    const startedAt = Date.now();
+    let round = 0;
+    let lastStatus = '等待读取';
+    while (Date.now() - startedAt < VERIFY_TIMEOUT_MS) {
+      round += 1;
+      const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+      update('已保存，正在等待 ESA KV 同步…', `核验第 ${round} 次 · 已等待 ${elapsed} 秒（最长 300 秒）`);
+      try {
+        const rows = await scanAll();
+        const result = inspectVisibility(rows, ctx);
+        lastStatus = `本次导入已可见 ${result.visible}/${result.total} 款；原有款式尚未可见 ${result.missingOld} 款`;
+        update(result.complete ? '已核验全部款式' : '已写入，正在同步款式数据…', lastStatus);
+        if (result.complete) return rows;
+      } catch (error) {
+        if (error?.status === 401 || error?.status === 403) throw error;
+        lastStatus = `本次核验暂时失败：${error?.message || '数据读取异常'}`;
+        update('等待同步，正在重新检查…', lastStatus);
+      }
+      const remaining = VERIFY_TIMEOUT_MS - (Date.now() - startedAt);
+      if (remaining <= 0) break;
+      const delay = Math.min(15000, 2000 + round * 1000);
+      await sleep(Math.min(delay, remaining));
+    }
+    const error = new Error(`已保存 ${ctx.saved} 款，但在 300 秒内未确认全部可见。${lastStatus}。请点“重新核验”，不要立即重复导入。`);
+    error.verificationTimeout = true;
+    throw error;
+  }
+
+  async function finalizeVerification(ctx, modal, btn, progress) {
+    const update = (stage, detail = '', verified = false, error = '') =>
+      progress.render({ done: ctx.saved, total: ctx.total, stage, detail, verified, error });
+    try {
+      const verifiedRows = await waitForVisibility(ctx, update);
+      pendingVerification = null;
+      pendingVerificationModal = null;
+      update('导入完成，数据已核验', `新增 ${ctx.created} · 更新 ${ctx.updated} · 跳过 ${ctx.skipped}`, true);
+      // Use the data from the successful verification itself; a second GET
+      // could hit another POP and replace all 17 rows with an old 9-row view.
+      setPageStyles(verifiedRows);
+      await sleep(550);
+      if (modal.isConnected && typeof closeStyleImportDialog === 'function') closeStyleImportDialog();
+      if (typeof showMessage === 'function') showMessage(
+        `导入并核验完成：新增 ${ctx.created}，更新 ${ctx.updated}，跳过 ${ctx.skipped}。`
+      );
+      return true;
+    } catch (error) {
+      pendingVerification = ctx;
+      pendingVerificationModal = modal;
+      update('数据已写入，尚未全部核验', `已确认写入 ${ctx.saved}/${ctx.total} 款`, false, error.message);
+      if (typeof showMessage === 'function') showMessage(
+        `款式已写入，但尚未确认全部可见：${error.message}`, 'error'
+      );
+      return false;
+    }
+  }
+
   async function performImport(btn) {
     if (inProgress) return;
     const modal = document.querySelector('#styleImportModal');
-    const records = typeof pendingStyleImportRecords === 'undefined'
-      ? null : pendingStyleImportRecords;
-    if (!modal || !Array.isArray(records) || !records.length) {
+    if (!modal) return;
+    // Closing the old dialog and opening a new Excel import must not reuse an
+    // unfinished verification from a different import session.
+    if (pendingVerificationModal && pendingVerificationModal !== modal) {
+      pendingVerification = null;
+      pendingVerificationModal = null;
+    }
+    const verifyingOnly = Boolean(pendingVerification);
+    const records = typeof pendingStyleImportRecords === 'undefined' ? null : pendingStyleImportRecords;
+    if (!verifyingOnly && (!Array.isArray(records) || records.length < 1)) {
       if (typeof showMessage === 'function') showMessage('请先选择要导入的款式', 'error');
       return;
     }
@@ -168,18 +273,35 @@
     window[SESSION_KEY] = true;
     modal.dataset.esaImportRunning = '1';
     const progress = progressView(modal);
+    const previousLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = verifyingOnly ? '核验中…' : '导入中…';
+
+    if (verifyingOnly) {
+      try {
+        const verified = await finalizeVerification(pendingVerification, modal, btn, progress);
+        if (!verified) btn.textContent = '重新核验';
+      } finally {
+        inProgress = false;
+        window[SESSION_KEY] = false;
+        if (modal.isConnected) {
+          delete modal.dataset.esaImportRunning;
+          btn.disabled = false;
+        }
+      }
+      return;
+    }
+
     let saved = 0;
     let total = records.length;
     let created = 0;
     let updated = 0;
     let skipped = 0;
-    const confirmed = new Set();
-    let commitRequired = false;
-    const update = (stage, detail = '', indexed = false, error = '') =>
-      progress.render({ done: saved, total, stage, detail, indexed, error });
-    const initialLabel = btn.textContent;
-    btn.disabled = true;
-    btn.textContent = '导入中…';
+    let indexed = false;
+    const confirmed = new Map();
+    const update = (stage, detail = '', verified = false, error = '') =>
+      progress.render({ done: saved, total, stage, detail, verified, error });
+
     try {
       if (records.length > MAX_ROWS) throw new Error(`一次最多导入 ${MAX_ROWS} 个款式`);
       update('正在检查已配置款式…');
@@ -187,6 +309,8 @@
       const work = collectRows(records, oldRows);
       total = work.rows.length;
       skipped = work.skipped;
+      const priorIds = new Map(oldRows.filter(row => row?.id && row.style_code)
+        .map(row => [String(row.id), codeKey(row.style_code)]));
       update('开始导入款式…', `共 ${total} 款，每批最多 ${WRITE_SIZE} 款`);
 
       for (let start = 0; start < total; start += WRITE_SIZE) {
@@ -194,91 +318,69 @@
         update('正在保存款式…', `第 ${start + 1}～${Math.min(start + chunk.length, total)} 款`);
         const result = await callWithRetry({ mode: 'write', rows: chunk });
         if (result.mode !== 'write' || !Array.isArray(result.rows) || result.rows.length !== chunk.length) {
-          throw new Error('服务器返回不完整的批次结果，停止导入；请稍后重试');
+          throw new Error('服务器返回的款式数量不完整，导入暂停；可能有部分数据已经写入');
         }
-        for (let i = 0; i < result.rows.length; i++) {
+        for (let i = 0; i < result.rows.length; i += 1) {
           const row = result.rows[i];
-          if (!row.id || !['created','updated'].includes(row.action)) {
-            throw new Error('服务器返回了无效款式记录，停止导入');
+          if (!row.id || !['created', 'updated'].includes(row.action) ||
+              codeKey(row.style_code) !== codeKey(chunk[i].style_code)) {
+            throw new Error('服务器返回了无效的款式记录，导入暂停');
           }
-          confirmed.add(String(row.id));
-          commitRequired = true;
-          if (row.action === 'created') created++;
-          else updated++;
-          saved++;
+          const target = chunk[i];
+          confirmed.set(String(row.id), {
+            style_code: target.style_code,
+            season: target.season,
+            base_price: target.base_price
+          });
+          if (row.action === 'created') created += 1;
+          else updated += 1;
+          saved += 1;
           update('正在保存款式…', `新增 ${created} · 更新 ${updated} · 跳过 ${skipped}`);
-          // The server returns up to three confirmations together. Animate
-          // each confirmed row in order (not optimistic progress).
           if (result.rows.length > 1) await sleep(90);
         }
       }
-      if (commitRequired) {
-        update('正在确认款式索引…', `全部 ${saved} 款已完成写入`);
-        await callWithRetry({ mode: 'commit', ids: Array.from(confirmed) });
-      }
-      update('导入完成', `新增 ${created} · 更新 ${updated} · 跳过 ${skipped}`, true);
-      await sleep(500);
-      if (typeof closeStyleImportDialog === 'function') closeStyleImportDialog();
-      if (typeof showMessage === 'function') showMessage(
-        `导入完成：新增 ${created}，更新 ${updated}，跳过 ${skipped}。如暂未显示，可能正在等待 ESA KV 同步。`
-      );
-      try {
-        await reloadStylesPaged();
-      } catch (refreshError) {
-        console.warn('[ESA style import] 数据已保存但列表刷新失败:', refreshError);
-        if (typeof showMessage === 'function')
-          showMessage('导入已经完成，但款式列表暂未同步。请稍后点击查询/刷新。');
-      }
+
+      update('正在更新款式索引…', `${saved}/${total} 款写入请求成功`);
+      await callWithRetry({ mode: 'commit', ids: Array.from(confirmed.keys()) });
+      indexed = true;
+      const ctx = { saved, total, created, updated, skipped, confirmedRows: confirmed, priorIds };
+      pendingVerification = ctx;
+      pendingVerificationModal = modal;
+      const verified = await finalizeVerification(ctx, modal, btn, progress);
+      if (!verified) btn.textContent = '重新核验';
     } catch (error) {
-      const rawMessage = error?.message || '网络或 EdgeKV 操作失败';
       let indexWarning = '';
-      if (commitRequired && confirmed.size) {
+      if (!indexed && confirmed.size > 0) {
         try {
-          update('正在保护已写入款式…', `已确认 ${confirmed.size} 款`);
-          await callWithRetry({ mode: 'commit', ids: Array.from(confirmed) });
+          update('正在保护已保存的数据…', `已确认 ${confirmed.size} 款`);
+          await callWithRetry({ mode: 'commit', ids: Array.from(confirmed.keys()) });
+          // A write batch can fail halfway through; do NOT claim all rows saved.
         } catch (commitError) {
-          indexWarning = `；已写入款式索引未全部确认：${commitError.message || '请稍后重试'}`;
+          indexWarning = `；索引提交尚未确认：${commitError.message}`;
         }
       }
-      update('导入中断，请检查并重试', `已确认 ${saved}/${total} 款；新增 ${created}，更新 ${updated}`, false, rawMessage + indexWarning);
-      if (typeof showMessage === 'function')
-        showMessage(`导入中断：${rawMessage}。${saved ? `已确认写入 ${saved} 款。` : ''}重新点击导入会核对并覆盖相同编码，不会盲目追加。`, 'error');
-      // Keep the Excel preview and modal; the user can retry later.
+      update('导入中断，请检查后重试', `已确认写入 ${saved}/${total} 款`, false,
+        (error?.message || '未知错误') + indexWarning);
+      if (typeof showMessage === 'function') showMessage(
+        `导入中断：${error?.message || '未知错误'}。已经返回成功的款式 ${saved} 款。${indexWarning}`, 'error'
+      );
     } finally {
       inProgress = false;
       window[SESSION_KEY] = false;
       if (modal.isConnected) {
         delete modal.dataset.esaImportRunning;
         btn.disabled = false;
-        btn.textContent = initialLabel;
+        if (!pendingVerification) btn.textContent = previousLabel;
       }
     }
   }
 
-  async function reloadStylesPaged() {
-    const rows = await scanAll();
-    if (typeof styles === 'undefined' || typeof renderStyles !== 'function') return;
-    const form = document.querySelector('#styleSearchForm');
-    let keyword = '';
-    if (form) {
-      const params = new URLSearchParams(new FormData(form));
-      keyword = codeKey(params.get('search'));
-    }
-    styles = rows
-      .filter(row => !keyword || [row.style_code, row.season, row.style_remark]
-        .some(value => codeKey(value).includes(keyword)))
-      .sort((a,b) => String(a.created_at || '').localeCompare(String(b.created_at || '')) || String(a.id).localeCompare(String(b.id)));
-    renderStyles();
-  }
+  // Existing admin.js list route GET reads all styles in one invocation and
+  // can exceed ESA's eight-KV call budget. Keep pagination for ESA only.
+  if (typeof loadStyles === 'function') loadStyles = reloadStylesPaged;
 
-  // The original admin list GET loads every style in one ESA invocation and
-  // can itself exceed 8 calls. Replace only this ESA-side function with paging.
-  if (typeof loadStyles === 'function') {
-    loadStyles = reloadStylesPaged;
-  }
-
-  // DOM event capture stops the old click handler BEFORE it can send
-  // {styles:[...]} (the incompatible legacy payload causing HTTP 409).
+  // Capture before the legacy click handler to prevent the old {styles:[...]}
+  // POST that returns HTTP 409 on the new scan/write/commit backend.
   document.addEventListener('click', event => {
     const target = event.target;
     const btn = target?.closest?.('#styleImportConfirmBtn');
@@ -301,5 +403,5 @@
     }
   }, true);
 
-  console.info('[product-review] ESA safe style import UI v2 loaded');
+  console.info('[product-review] ESA safe style import UI v3 (visibility verified) loaded');
 })();
