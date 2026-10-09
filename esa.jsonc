@@ -1,6 +1,6 @@
 {
   "name": "new-product-rating",
-  "entry": "./esa-functions/index.js",
+  "entry": "./esa-functions/esa-import-entry.js",
   "installCommand": "",
   "buildCommand": "",
   "assets": {
