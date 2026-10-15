@@ -730,8 +730,8 @@ function isReviewLinkExpired(link) {
   return String(link.expires_at).replace('T', ' ').slice(0, 19) <= new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
 }
 function reviewLinkUrl(code, accessToken = '') {
+  // 后台显示、复制短链接；服务端原有的旧rt验签逻辑继续保留。
   const url = new URL(`/${encodeURIComponent(String(code || '').trim())}`, window.location.origin);
-  if (accessToken) url.searchParams.set('rt', accessToken);
   return url.toString();
 }
 function reviewLinkStyleSnapshot(row) {

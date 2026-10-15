@@ -287,12 +287,20 @@ function newSubmissionId() {
 }
 
 function randomReviewLinkCode(length = 8) {
-  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
-  const bytes = new Uint8Array(length);
-  try { globalThis.crypto?.getRandomValues?.(bytes); } catch (_) {
-    for (let i = 0; i < bytes.length; i += 1) bytes[i] = Math.floor(Math.random() * 256);
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  if (!globalThis.crypto?.getRandomValues) throw new Error('当前运行环境不支持安全随机数，无法生成评分链接');
+  const limit = Math.floor(256 / alphabet.length) * alphabet.length;
+  while (true) {
+    let code = '';
+    while (code.length < length) {
+      const bytes = new Uint8Array(length);
+      globalThis.crypto.getRandomValues(bytes);
+      for (const value of bytes) {
+        if (value < limit && code.length < length) code += alphabet[value % alphabet.length];
+      }
+    }
+    if (/[A-Za-z]/.test(code) && /[0-9]/.test(code)) return code;
   }
-  return Array.from(bytes).map(b => alphabet[b % alphabet.length]).join('');
 }
 
 function normalizeReviewLinkCode(value) {
@@ -1686,9 +1694,16 @@ function createKVStorage(env) {
         : [];
       const availableStyles = Array.from(new Set(requestedStyleIds)).map(id => ({ id }));
       const data = normalizeReviewLinkPayload(payload, availableStyles);
-      let code = normalizeReviewLinkCode(payload.code);
-      if (!code) code = randomReviewLinkCode(12);
-      if (!code) throw new Error('生成评分链接失败，请重试');
+      // 8位字母数字随机码；碰撞时更换候选码。控制在ESA EdgeKV调用限制内。
+      let code = '';
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const candidate = randomReviewLinkCode(8);
+        if (!(await getJson(keyReviewLink(candidate), null))) {
+          code = candidate;
+          break;
+        }
+      }
+      if (!code) throw new Error('评分链接随机码出现冲突，请重试');
 
       // Snapshot the public scoring payload into the review-link record. This
       // makes public access a single EdgeKV read after propagation and avoids
