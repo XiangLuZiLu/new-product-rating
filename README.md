@@ -247,3 +247,20 @@ systemctl daemon-reload
 - Git `main` 被改动：停下；当前项目中的自动准备脚本会检查必须在 `vps`，正常情况下不会触碰 `main`。
 - 公网 `403 Server: ESA`：先确认 ESA 的站点加速/WAF/DNS，VPS 的 `/healthz` 正常不意味着公网路由已切换。
 - `SQLite is an experimental feature`：Node 22 的提示，不等于错误。
+
+## 部署位置自动识别（PORTABLE_IMAGE_ROOT_V2）
+
+图片目录恒为 **安装项目的根目录/image/**，使用 server/local-image.js 自身文件位置（import.meta.url）计算，不依赖当前工作目录。
+例如：/opt/new-product-rating/image/ 或 /root/new-product-rating/image/。前端设置直接显示 ./image/ 即可。
+
+如果将项目搬到其他目录，需要重新生成 systemd 单元文件，使 WorkingDirectory、ExecStart 和 ReadWritePaths 与实际路径一致：
+
+```bash
+cd /实际安装目录/new-product-rating
+install -d -o ratingapp -g ratingapp -m 750 ./image
+node scripts/render-rating-service.mjs > /etc/systemd/system/new-product-rating.service
+systemctl daemon-reload
+systemctl restart new-product-rating
+```
+
+注意：SQLite 的 DB_PATH 是独立设置，如迁移目录请检查 .env 是否仍指向旧位置。/root 默认无法被 ratingapp 用户访问，不建议部署在 /root 或放宽 /root 权限。
