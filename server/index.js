@@ -9,6 +9,7 @@ import { createSqliteStorage } from './sqlite-storage.js';
 import { tryDeleteImageByUrl } from './platform/_shared/imageStorage.js';
 // VPS_LOCAL_IMAGES_TOAST_V1
 import { getLocalImageFile } from './local-image.js';
+import { exportBusinessBackup, inspectBusinessBackup, restoreBusinessBackup } from './backup-service.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const publicDir = resolve(root, 'public');
@@ -75,6 +76,31 @@ async function dispatch(request) {
         updated_count:results.filter(x=>x.action==='updated').length,skipped_count:0},200);
     });
   }
+  // VPS_BACKUP_FEATURE_V1 — encrypted business-only backup, no local image files.
+  if(path.startsWith('/api/backup/') && method==='POST') {
+    return protectedRoute(request,async()=>{
+      if(path==='/api/backup/export') {
+        const body=await request.json();
+        const exported=await exportBusinessBackup(env,body?.password);
+        return new Response(exported.bytes,{headers:{
+          'content-type':'application/zip',
+          'content-disposition':`attachment; filename="${exported.filename}"`,
+          'x-backup-filename':exported.filename,
+          'cache-control':'private, no-store',
+          'x-content-type-options':'nosniff'
+        }});
+      }
+      if(path!=='/api/backup/inspect' && path!=='/api/backup/restore') return json({ok:false,message:'接口不存在'},404);
+      const form=await request.formData(),file=form.get('file');
+      if(!file || typeof file.arrayBuffer!=='function')return json({ok:false,message:'请选择本系统导出的 ZIP 文件'},400);
+      if(file.size>120*1024*1024)return json({ok:false,message:'备份文件超过 120 MB'},413);
+      const bytes=await file.arrayBuffer(),password=String(form.get('password')||'');
+      if(path==='/api/backup/inspect')return json({ok:true,...await inspectBusinessBackup(bytes,password)});
+      const mode=String(form.get('mode')||'replace');
+      const data=await restoreBusinessBackup(env,bytes,password,mode);
+      return json({ok:true,...data});
+    });
+  }
   if(path==='/api/data/clear-all' && method==='DELETE'){
     return protectedRoute(request,async()=>{
       const images=[...new Set((await storage.listStyles({})).map(x=>x.product_image).filter(Boolean))];
@@ -88,7 +114,7 @@ async function dispatch(request) {
 const server=http.createServer(async(req,res)=>{
   try{
     const path=new URL(req.url||'/','http://localhost').pathname;
-    const limit = path === '/api/upload-image' ? 52*1024*1024 : 15*1024*1024;
+    const limit = path === '/api/upload-image' ? 52*1024*1024 : path.startsWith('/api/backup/') ? 125*1024*1024 : 15*1024*1024;
     if(req.headers['content-length'] && Number(req.headers['content-length'])>limit){res.writeHead(413);res.end('Request Too Large');return;}
     if (path.startsWith('/image/')) {
       const localFile = getLocalImageFile(path);
@@ -112,5 +138,5 @@ const server=http.createServer(async(req,res)=>{
     Readable.fromWeb(response.body).pipe(res);
   }catch(e){console.error(e?.stack||e);if(!res.headersSent){res.writeHead(500,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify({ok:false,message:'服务器内部错误'}));}else res.destroy();}
 });
-server.requestTimeout=30000;
+server.requestTimeout=300000; // allow authenticated ZIP uploads on slower connections
 server.listen(port,host,()=>console.log(`new-product-rating VPS 已启动：http://${host}:${port} / DB=${env.DB_PATH||'(default)'}`));

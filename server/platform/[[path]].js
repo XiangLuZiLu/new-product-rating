@@ -17,6 +17,7 @@ function adminHtml(adminPath, sessionIdleMinutes) {
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>新品评审后台</title>
   <link rel="stylesheet" href="/assets/style.css?v=20261019-vps-magic-image-v3" />
+  <link rel="stylesheet" href="/assets/backup-ui.css?v=20261019-backup-v1" />
 </head>
 <body>
   <div class="page-bg"></div>
@@ -45,6 +46,7 @@ function adminHtml(adminPath, sessionIdleMinutes) {
           <p>配置“哪些款需要评分”和“评分项”；评分人员通过管理员生成的有效链接逐款评分。</p>
         </div>
         <div class="top-actions">
+          <button id="backupManageBtn" class="ghost no-print" type="button">数据备份与恢复</button>
           <button id="printBtn" class="ghost" type="button">打印评分结果</button>
           <button id="clearAllDataBtn" class="danger-light" type="button">清空全部数据</button>
           <button id="logoutBtn" class="danger-light" type="button">退出</button>
@@ -298,6 +300,7 @@ function adminHtml(adminPath, sessionIdleMinutes) {
   </main>
   <script>window.__ADMIN_PATH__ = ${JSON.stringify(adminPath)}; window.__SESSION_IDLE_MINUTES__ = ${JSON.stringify(sessionIdleMinutes)};</script>
   <script src="/assets/admin.js?v=20261019-vps-magic-image-v3" defer></script>
+  <script src="/assets/backup-ui.js?v=20261019-backup-v1" defer></script>
 </body>
 </html>`;
 }
