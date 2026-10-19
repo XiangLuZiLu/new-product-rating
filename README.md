@@ -1,282 +1,407 @@
-# new-product-rating — VPS + SQLite 版完整安装包
+# 新品评审评分系统（VPS / Node.js / SQLite）
 
-适用环境：Ubuntu 24.04、Node.js 22.13+（服务器已确认 v22.23.3）、2 核 1.6 GiB；无需 Docker、SQLite 命令行工具或 npm 安装依赖。
+> **部署分支：[`vps`](https://github.com/XiangLuZiLu/new-product-rating/tree/vps)**。`main` 是独立分支，不要将本指南中的部署、构建或数据操作误用于 `main`。
+>
+> 本文针对当前 VPS 版实际代码整理，涵盖 **Git 克隆 → 环境初始化 → SQLite 与图片权限 → 测试 → systemd 开机自启 → Caddy HTTPS → 日常更新、重启和故障排查**。适用于 Ubuntu 24.04、Node.js **22.13.0 或更新的 Node 22 版本**。如果你已经部署成功，直接阅读[更新现有站点](#八更新现有站点不覆盖业务数据)。
 
-**重要说明**：压缩包收录全部 VPS 新增后端、SQLite 代码、自动改造程序、测试及部署配置。原版的 `public/` 前端、必要的 ESA 路由/业务模块保留原样作为兼容基础，由 `scripts/prepare-vps.ps1` **从你自己的 GitHub 仓库 `main` 分支恢复到本地 `vps` 工作树，再转换为 `server/platform/`**。因此压缩包解压本身还不是最终完整网站；执行“Windows 组装步骤”后，`vps` 分支就是完整项目。无需另行手工编写代码。
+## 一、项目概览与重要路径
 
-`main` 分支不会被修改。当前 GitHub 连接只能读不能推送；上传由你自己的 Git 账号完成。
+| 项目 | 当前 VPS 部署示例 | 说明 |
+|---|---|---|
+| GitHub | `XiangLuZiLu/new-product-rating` 的 `vps` 分支 | 与 `main` 独立 |
+| 项目目录 | `/opt/new-product-rating` | 推荐放在 `/opt`，不要放在 `/root` 下 |
+| 服务器内部地址 | `http://127.0.0.1:18080` | 不直接向公网开放 18080 |
+| 正式域名 | `https://ratings.xianglupiju.com` | 以实际 DNS / Caddy 配置为准 |
+| 管理后台 | `https://ratings.xianglupiju.com/admin` | `ADMIN_PATH` 可配置 |
+| 服务名称 | `new-product-rating` | 通过 systemd 管理 |
+| 运行用户 | `ratingapp` | 最小权限 |
+| SQLite | `/opt/new-product-rating/data/rating.sqlite` | 实际以 `.env` 的 `DB_PATH` 为准；运行时可能包含 `-wal`、`-shm` |
+| 本地图片 | `/opt/new-product-rating/image/` | 实际随项目目录自动变化，为 `./image/` |
+| 恢复前快照 | `data/backups/pre-restore-*.sqlite` | 恢复前自动生成，属本地运维快照，不含图片 |
+| Caddy | `/etc/caddy/Caddyfile`、可能的 `/etc/caddy/sites/*.caddy` | 不覆盖其他站点配置 |
 
-## 设计
+技术上使用 Node.js 内置 HTTP 服务及 `node:sqlite`，**不需要 Docker、PostgreSQL、SQLite 命令行工具或额外的 npm 依赖**。SQLite 使用 WAL，因此不要在应用运行期间直接复制单个 `.sqlite` 文件当作一致性备份，应使用后台备份功能或 SQLite 在线备份机制。
 
-- `127.0.0.1:18080`：后端内部端口。现有 `127.0.0.1:9527` 的 linqilu-server 保持不变。
-- `/opt/new-product-rating/data/rating.sqlite`：SQLite 新数据库，默认空库。采用 WAL、事务提交、同评分链接+评分人+北京时间自然日去重。
-- `https://rating.xianglupiju.com`：正式域名只是**示例目标**；需检查现有 Caddy/DNS/ESA 配置后才能切换。Caddy 对外使用标准 443，访问时不需输入 18080。
-- 后台 `/admin`，原有静态前端和主要 API 不变。
-- 评分链接管理点击“链接名称”弹出评分人、评分状态、评分时间。记录按**评分链接+评分人+评分日期**分组：“评分中”显示最近一次开始/保存草稿时间，“已完成”显示正式提交时间。仅打开链接未输入姓名的不显示。
-- 保留原七牛云 S3 兼容图片上传、导入及导出业务模块。图片存储需要在后台配置实际七牛云参数；系统不会自动恢复 ESA 上的设置。
-- 不配置数据库自动备份，不导入原有 ESA 数据。Git 忽略 `.env` 和 `data/`。
+**一定要保留的数据：** `.env`、`data/`（含 SQLite、WAL/SHM 和恢复前快照）、`image/`。这三个路径不会通过 GitHub 自动恢复。正常 `git pull` 不会删除它们，但切勿对项目目录使用 `git clean -fdx`、`git reset --hard` 后再误删数据，或直接 `rm -rf /opt/new-product-rating`。
 
-## 1. Windows：将新代码组装到 vps 并上传 GitHub
+---
 
-你之前已经在 `E:\Project\new-product-rating-git` 的 `vps` 分支执行过 `git rm -r -- .`，这不要紧。**不要再执行一次 `git rm`，也不要删除 `.git` 目录。**
+## 二、初次部署：准备 Ubuntu 与 Node.js
 
-下载本 ZIP 后，将 **ZIP 内部文件** 解压到 `E:\Project\new-product-rating-git`。下载文件假定保存在 Downloads：
+使用具有 `sudo` 权限的账号；以下示例使用 `root` SSH 终端，普通用户请自行为系统管理命令添加 `sudo`。
 
-```powershell
-Set-Location 'E:\Project\new-product-rating-git'
-git branch --show-current
-# 必须是 vps；如果不是，停止
-
-$zip = "$env:USERPROFILE\Downloads\new-product-rating-vps-release.zip"
-Expand-Archive -LiteralPath $zip -DestinationPath 'E:\Project\new-product-rating-git' -Force
-
-# 脚本会核对分支和 remote、恢复 main 的必要文件、转换为 VPS 结构、检测 JavaScript、运行 SQLite 单元测试
-powershell -ExecutionPolicy Bypass -File .\scripts\prepare-vps.ps1
-
-# 完整 HTTP 接口验收：在临时数据库和临时端口运行，不会写真实业务数据
-node scripts/integration-smoke.mjs
-```
-
-只在所有检查通过后推送：
-
-```powershell
-Set-Location 'E:\Project\new-product-rating-git'
-git add -A
-git status --short
-# 确认无 .env、密钥、data、*.sqlite；.env.example 是模板，可提交
-git diff --cached --check
-git commit -m 'VPS SQLite app with reviewer progress dialog'
-git push -u origin vps
-```
-
-完成后访问 https://github.com/XiangLuZiLu/new-product-rating/tree/vps ，应包含 `public/`、`server/platform/`、`server/index.js`、`server/sqlite-storage.js`、`deploy/`、`scripts/`。
-
-> 注意：首次执行后 `esa-functions/` 会移动到 `server/platform/`，这是预期行为；`main` 不受影响。不要在已完成改造的目录里重新恢复 `esa-functions/` 或重复覆盖 ZIP。遇到错误暂停并提供完整输出，不要通过 `git reset --hard` 处理。
-
-## 2. Ubuntu：取得 vps 代码
-
-SSH 登录你提供过检测结果的阿里云 ECS 服务器（不是另一台 Dify 服务器），使用 root 或有 sudo 权限的用户：
+### 1. 检查环境和正在运行的服务
 
 ```bash
-hostname
-node -v
-ss -lntp | grep -E ':(9527|18080)[[:space:]]' || true
-# 确认 18080 当前空闲；现有 9527 不要动
+cat /etc/os-release | head -n 6
+uname -m
+date
+command -v git || true
+command -v node || true
+node -v 2>/dev/null || true
+ss -lntp | grep -E ':(18080|9527)[[:space:]]' || true
+```
 
+如果 **18080 已被其他应用占用**，先查清原因，不要直接停止进程。现有 `9527` 是独立服务，与本项目无关，**禁止误停**。
+
+### 2. 安装 Git、工具和 Node.js
+
+```bash
+apt-get update
+apt-get install -y git curl ca-certificates openssl
+```
+
+如果 `node -v` 已达到 **22.13.0**（例如 `v22.23.3`），**不需要重新安装 Node**。如果尚未安装或版本过低，可按 NodeSource 的 Node 22 安装方式操作；以下脚本先保存到文件，便于检查：
+
+```bash
+curl -fsSL https://deb.nodesource.com/setup_22.x -o /tmp/nodesource-setup-22.sh
+# 可先查看安装脚本内容：less /tmp/nodesource-setup-22.sh
+bash /tmp/nodesource-setup-22.sh
+apt-get install -y nodejs
+node -v
+```
+
+确认 Node 符合要求（脚本会在版本过低时退出）：
+
+```bash
+node -e 'const [a,b]=process.versions.node.split(".").map(Number);if(a!==22||b<13){console.error("需要 Node 22.13+，当前为",process.version);process.exit(1)}console.log("Node.js 版本检查通过:",process.version)'
+```
+
+> `node:sqlite` 在 Node 22 中可能输出实验性功能提示，这不是应用启动失败。
+
+---
+
+## 三、从 GitHub 拉取 `vps` 项目
+
+首次部署、且确认 `/opt/new-product-rating` 目录不存在时执行：
+
+```bash
+cd /opt
+# 如已存在该目录，请停止 clone，跳到“八、更新现有站点”。
 if [ -e /opt/new-product-rating ]; then
-  echo '目录已存在：先检查内容、分支和工作区，不执行覆盖式 clone'
-  ls -ld /opt/new-product-rating
-  git -C /opt/new-product-rating status --short --branch 2>/dev/null || true
+  echo '项目目录已存在，请不要覆盖克隆，改用第八章的更新步骤'
 else
   git clone --branch vps --single-branch \
     https://github.com/XiangLuZiLu/new-product-rating.git \
     /opt/new-product-rating
 fi
+cd /opt/new-product-rating
+git branch --show-current
+git status --short
 ```
 
-**只有**首次克隆成功、且确认是 `vps` 才执行下面步骤：
+应显示 `vps`，且没有未提交的代码改动。核对关键文件：
+
+```bash
+ls -l server/index.js server/sqlite-storage.js server/backup-service.js
+ls -l public/assets/admin.js public/assets/backup-ui.css public/assets/backup-ui.js
+ls -l scripts/render-rating-service.mjs .env.example
+```
+
+> 如果当前目录已经存在，不要再次 clone、删除或覆盖。以后只执行第八章的 `git pull --ff-only origin vps`。
+
+### Windows 开发电脑可选：本地克隆
+
+在 PowerShell 中，根据需要调整保存目录：
+
+```powershell
+git clone --branch vps --single-branch https://github.com/XiangLuZiLu/new-product-rating.git "E:\Project\new-product-rating-git"
+cd "E:\Project\new-product-rating-git"
+git branch --show-current
+```
+
+如果该目录原本已经有 Git 仓库，则**不要重复 clone**；在正确的 `vps` 分支修改代码、测试，最后 `git add`、`git commit`、`git push origin vps`。
+
+---
+
+## 四、配置 `.env` 和持久化目录
+
+### 1. 创建专用运行用户
+
+```bash
+id ratingapp >/dev/null 2>&1 || \
+  useradd --system --user-group --home-dir /opt/new-product-rating --shell /usr/sbin/nologin ratingapp
+```
+
+### 2. 初始化配置文件（不覆盖旧密码）
 
 ```bash
 cd /opt/new-product-rating
-printf '当前分支: '; git branch --show-current
-ls -l server/index.js server/platform/index.js public/assets/admin.js
-node scripts/verify-build.mjs
-node --test server/sqlite-storage.test.js
-node scripts/integration-smoke.mjs
-```
-
-最后两项是分别独立的 SQLite 单元测试、在随机临时数据库上的完整 HTTP 冒烟测试，不会更改你的实际空数据库。
-
-## 3. 配置真实业务运行环境
-
-```bash
-cd /opt/new-product-rating
-# 仅在 .env 尚不存在时复制，避免覆盖已有密码
-if [ ! -f .env ]; then cp .env.example .env; chmod 600 .env; fi
-# 生成随机 64 位十六进制密钥，用于 SESSION_SECRET
+if [ ! -f .env ]; then
+  cp .env.example .env
+fi
+chmod 600 .env
 openssl rand -hex 32
 nano .env
 ```
 
-`nano` 中至少填写下面四项，其他可保持默认：
+在 `.env` 中按实际环境设置（下面的密码只写示意值，不要照抄）：
 
-```ini
+```dotenv
 HOST=127.0.0.1
 PORT=18080
 ADMIN_PATH=admin
 ADMIN_USERNAME=admin
-ADMIN_PASSWORD=这里改成你自己的高强度密码
-SESSION_SECRET=这里填入刚才openssl生成的64位十六进制随机串
+ADMIN_PASSWORD=请换成自己的强密码
+SESSION_SECRET=粘贴刚才openssl产生的64位随机十六进制串
+SESSION_IDLE_MINUTES=120
 STORAGE_DRIVER=sqlite
 DB_PATH=/opt/new-product-rating/data/rating.sqlite
+IMAGE_STORAGE_DRIVER=url
 DRAFT_TIMEZONE=Asia/Shanghai
 ```
 
-不要将真实密码发送给他人或提交到 GitHub。保存按 `Ctrl+O`、回车、`Ctrl+X`。
+在 `nano` 中按 `Ctrl+O`、回车保存，`Ctrl+X` 退出。不要把真实 `.env` 提交到 GitHub、上传聊天或贴进日志。
 
-首次快速启动，注意这一步是在**前台**运行：
+### 3. 创建数据库、图片目录并赋予权限
 
 ```bash
 cd /opt/new-product-rating
-node --env-file=.env server/index.js
+install -d -m 750 -o ratingapp -g ratingapp ./data ./image
+chown ratingapp:ratingapp .env
+chmod 600 .env
+ls -ld ./data ./image
+ls -l .env
 ```
 
-另外开一个 SSH 窗口执行：
+**已经有正式 SQLite 数据的服务器**：先确认 `data/rating.sqlite*` 属于 `ratingapp` 并可写，必要时仅针对本项目数据文件调整属主；不要运行删除、初始化或覆盖数据库的命令。若 `DB_PATH` 不在 `./data`，需为其实际目录另外设置安全权限并调整 systemd 的 `ReadWritePaths`。
+
+项目图片位置根据 `server/local-image.js` 所在的项目自动计算：无论文件上传时实际扩展名是否正确，后端会根据支持的文件签名识别 JPG / PNG / WebP / GIF / AVIF；原七牛云等 S3 图片存储仍可通过后台配置。`image/` 不会进入 Git 仓库。
+
+---
+
+## 五、上线前测试（使用临时测试数据库）
 
 ```bash
-curl -i http://127.0.0.1:18080/healthz
-curl -I http://127.0.0.1:18080/admin
-ss -lntp | grep ':18080'
-```
-
-预期 `/healthz` 返回 `200` 和 `{ "ok": true }`，`/admin` 返回 HTML。完成后回到前台按 `Ctrl+C`，再进入 systemd 步骤。
-
-## 4. 设置 systemd 开机自启
-
-确保前台 Node 已退出，避免重复占用 18080。执行：
-
-```bash
-# 只在用户不存在时创建专用用户
-id ratingapp >/dev/null 2>&1 || useradd --system --user-group --home /opt/new-product-rating --shell /usr/sbin/nologin ratingapp
-
 cd /opt/new-product-rating
-install -d -m 750 -o ratingapp -g ratingapp /opt/new-product-rating/data
-chown ratingapp:ratingapp /opt/new-product-rating/.env
-chmod 600 /opt/new-product-rating/.env
+node scripts/verify-build.mjs
+node --test server/sqlite-storage.test.js
+node scripts/integration-smoke.mjs
+runuser -u ratingapp -- node scripts/local-images-smoke.mjs
+runuser -u ratingapp -- node scripts/backup-feature-smoke.mjs
+```
 
-# 与本机 Node.js 的实际位置核对：你此前 Node 路径是 /usr/bin/node
-command -v node
+这些脚本用于检查文件、SQLite、HTTP 接口、图片读写及备份/恢复行为；`local-images-smoke` 会在项目 `image/` 下临时创建并清理测试图片。**任何测试失败时先看错误，不要直接上线**。测试不能替代在真实域名下的浏览器验收。
 
-cp deploy/new-product-rating.service /etc/systemd/system/new-product-rating.service
+---
+
+## 六、创建 systemd 服务并设置重启、开机自启
+
+安装/更新前，先检查没有其他非 systemd 的 Node 进程监听 18080。使用项目自带生成器，自动填入当前项目路径和实际 Node 可执行文件路径，**不要手写固定路径服务文件**。
+
+```bash
+cd /opt/new-product-rating
+node scripts/render-rating-service.mjs > /tmp/new-product-rating.service
+cat /tmp/new-product-rating.service
+systemd-analyze verify /tmp/new-product-rating.service
+```
+
+> `>` 会把生成结果写入文件，因此第一条命令**没有输出是正常的**。检查生成结果至少包含正确的 `WorkingDirectory`、`ExecStart` 和包含 `data`、`image` 的 `ReadWritePaths`。
+
+配置检查通过后：
+
+```bash
+install -m 644 /tmp/new-product-rating.service /etc/systemd/system/new-product-rating.service
 systemctl daemon-reload
 systemctl enable --now new-product-rating
+systemctl is-enabled new-product-rating
+systemctl is-active new-product-rating
 systemctl status new-product-rating --no-pager -l
 curl -i http://127.0.0.1:18080/healthz
-ss -lntp | grep -E ':(9527|18080)[[:space:]]'
 ```
 
-**预期两个端口都存在且分别对应各自的 Node 进程。** 如果服务失败，用：
+预期：`is-enabled` 返回 `enabled`，`is-active` 返回 `active`，`/healthz` 返回 **HTTP 200**、`{"ok":true}`。如部署前服务已经运行、只是更新服务文件，需再执行一次 `systemctl restart new-product-rating`，让新配置生效。
+
+日常使用：
 
 ```bash
-journalctl -u new-product-rating -n 100 --no-pager
+# 查看运行状态
+systemctl status new-product-rating --no-pager -l
+# 重启（更新代码后使用）
+systemctl restart new-product-rating
+# 停止/启动
+systemctl stop new-product-rating
+systemctl start new-product-rating
+# 确认开机自启
+systemctl is-enabled new-product-rating
+# 需要时启用开机自启
+systemctl enable new-product-rating
+# 近 100 行日志
+journalctl -u new-product-rating -n 100 --no-pager -l
+# 实时日志（Ctrl+C 结束查看，不会停止服务）
+journalctl -u new-product-rating -f
 ```
 
-不得使用 `systemctl stop` 停止原来 9527 服务。
+**不要对旧的 9527 网站或其他业务执行上述 `systemctl stop/restart`。** 本项目的系统服务名称始终是 `new-product-rating`。
 
-## 5. Caddy 反代与域名（须先检查）
+---
 
-你这台机器已有 Caddy，并且已有其他网站。**绝对不要覆盖 `/etc/caddy/Caddyfile`**。
+## 七、配置 Caddy 反向代理与 HTTPS
+
+首先检查现有配置，**不要覆盖 `/etc/caddy/Caddyfile`** 或删除已有站点：
 
 ```bash
+systemctl is-active caddy
 cat /etc/caddy/Caddyfile
-grep -R -n 'rating.xianglupiju.com' /etc/caddy || true
+grep -R -n 'ratings.xianglupiju.com' /etc/caddy 2>/dev/null || true
+ss -lntp | grep -E ':(80|443|18080|9527)[[:space:]]' || true
 ```
 
-若已有同名站点/反代，**不要新增第二个同名块**；先确认该规则的来源和 DNS/ESA 代理状态。若确认没有该域名且你确实准备把这个域名切到 VPS，可向 `/etc/caddy/Caddyfile` 末尾追加以下站点块：
+- 如果已经存在 `ratings.xianglupiju.com` 的 Caddy 站点：**只核对**该站点是否代理到 `127.0.0.1:18080`，不再添加第二个同名站点。
+- 如果确实没有，并且主 `Caddyfile` 已包含 `import /etc/caddy/sites/*.caddy`，可以新增一个独立配置文件，不能改动其他站点：
 
 ```bash
-cat >> /etc/caddy/Caddyfile <<'EOF'
-
-rating.xianglupiju.com {
+install -d -m 755 /etc/caddy/sites
+cat > /etc/caddy/sites/new-product-rating.caddy <<'CADDY'
+ratings.xianglupiju.com {
     encode zstd gzip
     reverse_proxy 127.0.0.1:18080
 }
-EOF
+CADDY
 caddy validate --config /etc/caddy/Caddyfile
-# 仅在 validate 成功时运行
+# 仅当 validate 成功时执行：
 systemctl reload caddy
 ```
 
-**域名仍由 ESA 代理时，公网访问得到的 403 可能来自 ESA，而不是 VPS。** 完成 DNS/ESA 切换前先验收本地 HTTP，勿直接修改云端 DNS 导致原评分系统下线。Caddy 申请 HTTPS 证书需要相应的 DNS 与公网网络满足条件。
+**只有在域名之前没有对应站点时才执行创建步骤**。如果主配置没有 `import`，先确认 Caddy 现有管理方式再修改；不要把上面的规则盲目追加到不明位置。检查 DNS / ESA / EdgeOne 是否指向当前 VPS，HTTPS 的 80/443 和证书签发也需要满足对应网络条件。
 
-正式访问：`https://rating.xianglupiju.com/admin`；新评分链接：`https://rating.xianglupiju.com/<系统生成的code>`。管理员先设置图片存储参数及评分项，再创建款式和链接。
-
-## 6. 业务验收清单
-
-1. 登录后台，验证登录失败/退出/会话有效期。
-2. 新建、编辑款式，导入 Excel 多条款式，并刷新确认数据立即可见。
-3. 配置七牛云图片存储并真实上传图片，确认新页面能显示图片、删除行为符合预期。
-4. 生成评分链接，复制短链，打开公众评分页。
-5. 输入测试评分人姓名并进入评分；后台点击链接名称，弹框应出现“评分中”，时间为北京时间。
-6. 修改部分评分并刷新，验证草稿恢复及日志的最后活动时间。
-7. 完整评分并提交；日志应改为“已完成”，填写正式提交时间，评分结果立即可见。
-8. 同一评分人、同一链接、同一个自然日尝试重复提交，应拒绝，之前结果不能重复写入。
-9. 测试已过期/已停用链接、导出、批量删除及保存设置。
-
-## 7. 日常管理、更新和删除
-
-查看运行状态：
+验证：
 
 ```bash
-systemctl status new-product-rating --no-pager
-journalctl -u new-product-rating -n 100 --no-pager
+curl -i http://127.0.0.1:18080/healthz
+curl -I https://ratings.xianglupiju.com/admin
 ```
 
-未来从 GitHub 更新已部署的 `vps` 分支：
+后台入口：<https://ratings.xianglupiju.com/admin>。如果本机 `/healthz` 正常而公网报错，继续检查 DNS、Caddy 日志或加速平台防护规则，不要先删数据库。
+
+---
+
+## 八、更新现有站点（不覆盖业务数据）
+
+这是以后从 GitHub `vps` 拉取最新功能的**常规步骤**，也适用于这次更新备份弹框的两列布局。
+
+### 1. 在 Windows 上提交代码（如有本地改动）
+
+```powershell
+cd "E:\Project\new-product-rating-git"
+git branch --show-current   # 必须是 vps
+git status --short
+node .\scripts\verify-build.mjs
+git add README.md public/assets/backup-ui.css
+git diff --cached --check
+git commit -m "Refine backup restore layout and deployment README"
+git push origin vps
+```
+
+如果本次通过 GitHub 网页直接修改并提交到 `vps`，则可以跳过 Windows 步骤。**检查 `git status` 是否存在其他未完成的本地改动，不要把无关文件误提交。**
+
+### 2. Ubuntu 拉取并验证
 
 ```bash
 cd /opt/new-product-rating
+git branch --show-current
 git status --short
-# 如显示本地修改，先处理修改，不要强拉
-# git pull 仅更新受 Git 管理的代码；.env 和 data/ 被忽略
+# 确认分支是 vps、没有不明本地修改，再继续：
+git fetch origin vps
+git diff --stat HEAD..origin/vps
 git pull --ff-only origin vps
 node scripts/verify-build.mjs
-node --test server/sqlite-storage.test.js
-systemctl restart new-product-rating
-systemctl status new-product-rating --no-pager
+runuser -u ratingapp -- node scripts/backup-feature-smoke.mjs
 ```
 
-将来需要彻底停用时，先移除专用 Caddy 站点块并通过 `caddy validate`/`systemctl reload caddy`，然后：
+### 3. 重启、检查状态与刷新浏览器
 
 ```bash
-systemctl disable --now new-product-rating
-rm -f /etc/systemd/system/new-product-rating.service
-systemctl daemon-reload
-# 确认该目录没有其他应用的数据且你确实不再需要后，才执行：
-# rm -rf -- /opt/new-product-rating
+systemctl restart new-product-rating
+systemctl is-active new-product-rating
+systemctl is-enabled new-product-rating
+curl -i http://127.0.0.1:18080/healthz
+journalctl -u new-product-rating -n 40 --no-pager -l
 ```
 
-删除 `/opt/new-product-rating` 会连同 SQLite 数据、WAL 文件、运行设置一起永久删除。你明确要求不自动备份，因此**无法依靠本部署方案恢复已删除的评分记录**。
+访问后台按 **Ctrl+F5 强制刷新**。静态 CSS 可能被浏览器缓存最多几分钟：如果新弹框仍显示旧布局，请先强制刷新，或等待缓存到期，**不要因此清空数据**。
 
-## 故障排查
+> 此处只更新受 Git 管理的文件。请保留 `.env`、`data/`、`image/`、`data/backups/`，不要在更新时运行 `git clean -fdx`、删除目录或手动重建 SQLite 数据库。
 
-- `EADDRINUSE :::18080`：18080 已被占用。先 `ss -lntp | grep ':18080'` 查进程，不要去停原 9527 服务。
-- `no such table` 或 `SQLITE_CANTOPEN`：检查 `data/` 的 owner 和权限、`.env` 内 `DB_PATH`。
-- `401`：检查管理员登录、Cookie、`ADMIN_PASSWORD`，不要将密码发到聊天里。
-- Git `Permission denied (publickey)` 或登录失败：修复 Windows 上 GitHub 的登录权限后再推送，不要提交 access token。
-- Git `main` 被改动：停下；当前项目中的自动准备脚本会检查必须在 `vps`，正常情况下不会触碰 `main`。
-- 公网 `403 Server: ESA`：先确认 ESA 的站点加速/WAF/DNS，VPS 的 `/healthz` 正常不意味着公网路由已切换。
-- `SQLite is an experimental feature`：Node 22 的提示，不等于错误。
+---
 
-## 部署位置自动识别（PORTABLE_IMAGE_ROOT_V2）
+## 九、后台「数据备份与恢复」使用说明
 
-图片目录恒为 **安装项目的根目录/image/**，使用 server/local-image.js 自身文件位置（import.meta.url）计算，不依赖当前工作目录。
-例如：/opt/new-product-rating/image/ 或 /root/new-product-rating/image/。前端设置直接显示 ./image/ 即可。
+在后台顶部点击 **数据备份与恢复**，按钮位于“打印评分结果”左边。
 
-如果将项目搬到其他目录，需要重新生成 systemd 单元文件，使 WorkingDirectory、ExecStart 和 ReadWritePaths 与实际路径一致：
+### 备份导出
+
+1. 输入 **8～256 字符**的备份密码。
+2. 点击“下载备份 ZIP”，保存文件及其密码。
+3. ZIP 仅包含四个功能模块的**业务数据**：款式配置、评分结果、评分链接、设置；也包括评分历史、草稿、评分进度及提交记录等关联数据。
+4. **不包含本地 `image/` 里的图片文件**，但数据库会保留图片地址。因此跨服务器恢复后，若没有单独复制对应图片，图片可能显示为缺失。
+5. `.env`、登录密码和 `SESSION_SECRET` 不在备份里；**设置中保存的 OSS/S3 密钥可能包含在加密数据库备份中**，因此请务必妥善保管 ZIP 和备份密码。
+
+### 上传与恢复
+
+1. 支持 **点击选择、拖拽或浏览器支持的 Ctrl+V 文件粘贴**，选择本系统导出的 `.zip`。
+2. 输入当时的备份密码，点击 **校验备份文件**；校验本身不修改数据库。
+3. 选择恢复方式（界面横向并排，默认勾选“完整覆盖”）：
+   - **完整覆盖**：用备份记录替换对应业务数据；恢复前会自动保存现有数据库快照到 `data/backups/`。
+   - **合并导入**：保留已有记录与设置，尽量添加备份中尚不存在且关联有效的记录；重复或冲突的记录跳过并报告数量。
+4. 确认内容后，点击 **确认并恢复**，再次确认才执行写入。建议在低峰时间恢复，避免同时有人评分或修改后台数据。
+5. 完成后刷新后台并核对款式、评分、链接和配置；**本地图片文件不会因为此次恢复被删除或覆盖**。
+
+当前实现限制：上传 ZIP 最大约 **120 MB**；导出的数据库快照最大约 **150 MB**。项目使用 AES-256-GCM 加密备份数据库，**忘记密码无法恢复加密文件**。定期下载到独立位置保存，不能把服务器本机 `data/backups/` 当作唯一容灾备份。
+
+---
+
+## 十、迁移到新服务器或更改部署目录
+
+1. 先在旧站点导出加密 ZIP，妥善保存备份密码。
+2. 在新服务器 clone `vps`，配置新 `.env`、专用用户、Node 22、systemd 和 Caddy。
+3. 通过后台“校验并恢复”导入业务数据库。
+4. **如需要旧图片继续显示，必须额外安全复制旧服务器的 `image/` 文件**（业务 ZIP 不包含图片）。如果图片保存在七牛云/OSS，则应单独核对新的存储配置和远程图片访问权限。
+5. 如果项目目录不再是 `/opt/new-product-rating`，要修改 `.env` 的绝对 `DB_PATH`，并在新目录执行：
 
 ```bash
-cd /实际安装目录/new-product-rating
-install -d -o ratingapp -g ratingapp -m 750 ./image
-node scripts/render-rating-service.mjs > /etc/systemd/system/new-product-rating.service
+cd /实际安装路径/new-product-rating
+install -d -m 750 -o ratingapp -g ratingapp ./data ./image
+node scripts/render-rating-service.mjs > /tmp/new-product-rating.service
+cat /tmp/new-product-rating.service
+systemd-analyze verify /tmp/new-product-rating.service
+install -m 644 /tmp/new-product-rating.service /etc/systemd/system/new-product-rating.service
 systemctl daemon-reload
+systemctl enable new-product-rating
 systemctl restart new-product-rating
+systemctl status new-product-rating --no-pager -l
 ```
 
-注意：SQLite 的 DB_PATH 是独立设置，如迁移目录请检查 .env 是否仍指向旧位置。/root 默认无法被 ratingapp 用户访问，不建议部署在 /root 或放宽 /root 权限。
+> 项目放在 `/root/...` 下时，默认 `ratingapp` 不能穿越 `/root` 目录；建议使用 `/opt` 或 `/srv`，不要为了省事放宽整个 `/root` 目录权限。
 
-## VPS 本地图片与居中提示（VPS_LOCAL_IMAGES_TOAST_V1）
+---
 
-后台设置 → 图片存储配置 → 选择“本地存储（项目目录 ./image）”→ 保存。
-图片保存在项目相对目录 ./image/ 下（具体绝对路径随部署位置自动变化），通过同一域名 /image/文件名 公开访问。
-本地图片仅支持 JPG、PNG、GIF、WebP、AVIF（不支持 SVG，以防同源脚本风险）。
-同一款式编码 + 文件前缀 + 扩展名会覆盖先前文件。图片目录被 .gitignore 忽略。
-首次上线须执行：
+## 十一、常见问题排查
+
+| 现象 | 优先检查 |
+|---|---|
+| `node:sqlite` 找不到或 Node 语法错误 | `node -v`，确认 Node 22.13+ |
+| `EADDRINUSE` / 18080 已占用 | `ss -lntp | grep :18080`，只处理本项目对应端口 |
+| `SQLITE_CANTOPEN`、`attempt to write a readonly database` | `.env` 的 `DB_PATH`、`data/` 属主、权限、systemd 的 `ReadWritePaths` |
+| 上传图片返回 400 或无法预览 | 检查管理员保存的本地图片配置、文件大小、是否有款式编码、`image/` 的 `ratingapp` 写权限和图片真实格式 |
+| 图片返回 404 | 核对 `./image/` 是否有该文件；业务 ZIP 不包含图片 |
+| 备份错误或 413 | ZIP/SQLite 大小上限、备份密码、加速平台请求体限制 |
+| 备份能恢复但图片不见 | 业务备份只保存图片路径，不保存图片文件 |
+| 公网 403/502、内部 `/healthz` 正常 | DNS、Caddy、ESA/EdgeOne 加速/WAF 或代理目标 |
+| `git pull --ff-only` 失败 | 本地分支有偏离或修改；先核对 `git status`，不要强制覆盖 |
+| systemd 启动后立刻退出 | `journalctl -u new-product-rating -n 100 --no-pager -l`（分享日志前注意遮盖敏感信息） |
+| 更新 CSS 后仍显示上下两行 | 后台按 `Ctrl+F5` 强制刷新，确认 `public/assets/backup-ui.css` 已更新 |
+
+**核心检查命令：**
 
 ```bash
-install -d -o ratingapp -g ratingapp -m 750 "$(pwd)/image"
-systemctl daemon-reload
-systemctl restart new-product-rating
+cd /opt/new-product-rating
+git status --short --branch
+node -v
+systemctl status new-product-rating --no-pager -l
+systemctl is-enabled new-product-rating
+curl -i http://127.0.0.1:18080/healthz
+journalctl -u new-product-rating -n 50 --no-pager -l
 ```
 
-原七牛云等 S3 配置保留；默认仍保持“只粘贴图片链接”，切换本地需要管理员手动保存。
+**安全提醒：** 不要公开 `.env`、真实管理员密码、`SESSION_SECRET`、七牛云/OSS 密钥、评分业务 ZIP 及其解密密码。正式数据应定期在服务器之外留存可验证的备份。
