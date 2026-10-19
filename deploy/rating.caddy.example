@@ -1,0 +1,6 @@
+# 请先确认你现有 /etc/caddy/Caddyfile 中没有同名域名。
+# 注意：不要直接覆盖现有 Caddyfile。
+rating.xianglupiju.com {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:18080
+}

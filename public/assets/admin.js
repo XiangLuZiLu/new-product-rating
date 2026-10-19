@@ -2260,6 +2260,51 @@ function updateReviewLinkSelectAllState() {
   selectAll.indeterminate = selectedCount > 0 && selectedCount < visibleCodes.length;
 }
 
+
+async function showReviewProgressDialog(link) {
+  if (!link) return;
+  document.getElementById('vpsReviewProgressBackdrop')?.remove();
+  const backdrop = document.createElement('div');
+  backdrop.id = 'vpsReviewProgressBackdrop';
+  backdrop.className = 'modal-backdrop vps-progress-backdrop';
+  backdrop.innerHTML = `
+    <div class="confirm-dialog vps-progress-dialog" role="dialog" aria-modal="true" aria-labelledby="vpsProgressTitle">
+      <div class="vps-progress-head">
+        <div><h3 id="vpsProgressTitle">评分状态记录</h3><p class="tip">${escapeHtml(link.name || link.code)}</p></div>
+        <button type="button" class="ghost" data-progress-close aria-label="关闭">✕</button>
+      </div>
+      <div class="vps-progress-table-wrap">
+        <table class="review-table vps-progress-table"><thead><tr><th>评分人</th><th>评分状态</th><th>评分时间（北京时间）</th></tr></thead>
+          <tbody data-progress-rows><tr><td colspan="3" class="empty">正在读取记录…</td></tr></tbody></table>
+      </div>
+      <p class="tip">评分中显示最后保存时间，已完成显示正式提交时间。</p>
+      <div class="confirm-actions"><button type="button" class="ghost" data-progress-close>关闭</button><button type="button" class="primary" data-progress-refresh>刷新记录</button></div>
+    </div>`;
+  document.body.appendChild(backdrop);
+  const close = () => { document.removeEventListener('keydown', esc); backdrop.remove(); };
+  const esc = (event) => { if (event.key === 'Escape') close(); };
+  document.addEventListener('keydown', esc);
+  backdrop.addEventListener('click', e => {
+    if (e.target === backdrop || e.target.closest('[data-progress-close]')) close();
+    if (e.target.closest('[data-progress-refresh]')) refresh();
+  });
+  async function refresh() {
+    const body = backdrop.querySelector('[data-progress-rows]');
+    body.innerHTML = '<tr><td colspan="3" class="empty">正在读取记录…</td></tr>';
+    try {
+      const data = await requestJson(`/api/review-links/${encodeURIComponent(link.code)}/progress`);
+      const list = data.items || [];
+      body.innerHTML = list.length ? list.map(item => `
+        <tr><td>${escapeHtml(item.reviewer || '')}</td>
+          <td><span class="vps-state ${item.status === 'completed' ? 'vps-state-done' : 'vps-state-active'}">${item.status === 'completed' ? '已完成' : '评分中'}</span></td>
+          <td>${escapeHtml(item.rating_time || '-')}</td></tr>`).join('') : '<tr><td colspan="3" class="empty">当前还没有评分人员记录</td></tr>';
+    } catch(e) {
+      body.innerHTML = `<tr><td colspan="3" class="empty">${escapeHtml(e.message || '读取失败')}</td></tr>`;
+    }
+  }
+  await refresh();
+}
+
 function renderReviewLinks() {
   if (!reviewLinksBody) return;
   if (!reviewLinks.length) {
@@ -2275,7 +2320,7 @@ function renderReviewLinks() {
     return `
       <tr>
         <td class="no-print select-col"><input type="checkbox" data-review-link-select="${escapeHtml(link.code)}" ${selectedReviewLinkCodes.has(String(link.code)) ? 'checked' : ''} /></td>
-        <td><strong>${escapeHtml(link.name || link.code)}</strong>${link.remark ? `<small class="link-remark">${escapeHtml(link.remark)}</small>` : ''}</td>
+        <td><button type="button" class="review-status-link" data-review-link-progress="${escapeHtml(link.code)}" title="查看评分状态">${escapeHtml(link.name || link.code)}</button>${link.remark ? `<small class="link-remark">${escapeHtml(link.remark)}</small>` : ''}</td>
         <td class="link-url-cell"><a class="review-link-open" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" title="在新标签页打开评分链接"><code>${escapeHtml(url)}</code></a></td>
         <td>${Array.isArray(link.style_ids) ? link.style_ids.length : Number(link.style_count || 0)}</td>
         <td>${escapeHtml(link.expires_at || '-')}</td>
@@ -3161,6 +3206,12 @@ if (deleteSelectedReviewLinksBtn) {
 }
 if (reviewLinksBody) {
   reviewLinksBody.addEventListener('click', async (event) => {
+    const progressBtn = event.target.closest('[data-review-link-progress]');
+    if (progressBtn) {
+      const selected = reviewLinks.find(x => String(x.code) === String(progressBtn.dataset.reviewLinkProgress));
+      await showReviewProgressDialog(selected);
+      return;
+    }
     const btn = event.target.closest('button[data-link-action]');
     if (!btn) return;
     const code = String(btn.dataset.code || '');

@@ -2590,3 +2590,17 @@ button.is-busy::before {
     min-width: 0;
   }
 }
+
+/* VPS PROGRESS UI */
+.review-status-link { border:0;background:transparent;color:#2563eb;text-decoration:underline;text-underline-offset:3px;font:inherit;font-weight:700;cursor:pointer;padding:2px 0;text-align:left; }
+.review-status-link:hover { color:#1d4ed8; }
+.vps-progress-backdrop { position:fixed;inset:0;z-index:9999;display:flex;justify-content:center;align-items:center;background:rgba(15,23,42,.58);padding:14px; }
+.vps-progress-dialog { width:min(760px,100%);max-height:85vh;overflow:auto;padding:22px;background:#fff;border-radius:16px; }
+.vps-progress-head { display:flex;align-items:start;justify-content:space-between;gap:12px; }
+.vps-progress-head h3 { margin:0 0 7px; }
+.vps-progress-table-wrap { margin:14px 0;max-height:55vh;overflow:auto; }
+.vps-progress-table { width:100%; }
+.vps-state { display:inline-block;border-radius:999px;padding:3px 9px;font-weight:700;font-size:.85em;white-space:nowrap; }
+.vps-state-done { color:#166534;background:#dcfce7; }
+.vps-state-active { color:#92400e;background:#fef3c7; }
+@media(max-width:600px){.vps-progress-dialog{padding:15px}.vps-progress-table{min-width:470px}}

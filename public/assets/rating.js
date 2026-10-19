@@ -926,6 +926,9 @@ reviewerForm.addEventListener('submit', async (event) => {
   setButtonBusy(submitBtn, true, '加载中...');
   try {
     const restored = await loadStyles();
+    try {
+      await requestJson('/api/public/progress', { method: 'POST', headers: { 'content-type': 'application/json; charset=utf-8' }, body: JSON.stringify({reviewer, review_link_code: reviewLinkCode}) });
+    } catch (error) { console.warn('记录开始评分状态失败', error); }
     showView(ratingView);
     if (restored) showMessage(`已恢复 ${reviewer} 今天未提交的评分进度，继续从第 ${currentIndex + 1} 款开始。`);
   } catch (e) {

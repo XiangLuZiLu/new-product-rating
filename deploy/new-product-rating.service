@@ -1,0 +1,22 @@
+[Unit]
+Description=New Product Rating VPS (SQLite)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ratingapp
+Group=ratingapp
+WorkingDirectory=/opt/new-product-rating
+ExecStart=/usr/bin/node --env-file=/opt/new-product-rating/.env /opt/new-product-rating/server/index.js
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/new-product-rating/data
+PrivateTmp=true
+UMask=0077
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target
