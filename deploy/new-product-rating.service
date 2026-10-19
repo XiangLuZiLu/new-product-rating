@@ -13,7 +13,8 @@ Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/opt/new-product-rating/data
+# VPS_LOCAL_IMAGES_TOAST_V1
+ReadWritePaths=/opt/new-product-rating/data /opt/new-product-rating/image
 PrivateTmp=true
 UMask=0077
 Environment=NODE_ENV=production

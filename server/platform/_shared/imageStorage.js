@@ -1,4 +1,6 @@
 import { getStorage, imageSettingsFromEnv, normalizeImageSettings } from './storage.js';
+// VPS_LOCAL_IMAGES_TOAST_V1
+import { saveLocalImage, deleteLocalImageUrl } from '../../local-image.js';
 
 const encoder = new TextEncoder();
 
@@ -187,6 +189,7 @@ function looksManagedImageKey(key, config = {}) {
 
 async function safeDeleteManagedImage(env, config, imageUrl) {
   const driver = normalizeImageDriver(config);
+  if (driver === 'local') return deleteLocalImageUrl(imageUrl, config);
   const key = objectKeyFromPublicUrl(imageUrl, config);
   if (!key || !looksManagedImageKey(key, config)) return { deleted: false, skipped: true, key: key || '' };
   if (driver === 'r2') return deleteFromR2(env, key);
@@ -228,6 +231,7 @@ export async function uploadImageFromRequest(request, env) {
   const bytes = await file.arrayBuffer();
   const contentType = file.type || 'application/octet-stream';
 
+  if (driver === 'local') return saveLocalImage(key, bytes, contentType);
   if (driver === 'r2') return uploadToR2(env, config, key, bytes, contentType);
   if (driver === 's3') return uploadToS3(config, key, bytes, contentType);
 

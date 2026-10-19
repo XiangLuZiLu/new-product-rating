@@ -264,3 +264,19 @@ systemctl restart new-product-rating
 ```
 
 注意：SQLite 的 DB_PATH 是独立设置，如迁移目录请检查 .env 是否仍指向旧位置。/root 默认无法被 ratingapp 用户访问，不建议部署在 /root 或放宽 /root 权限。
+
+## VPS 本地图片与居中提示（VPS_LOCAL_IMAGES_TOAST_V1）
+
+后台设置 → 图片存储配置 → 选择“本地存储（项目目录 ./image）”→ 保存。
+图片保存在项目相对目录 ./image/ 下（具体绝对路径随部署位置自动变化），通过同一域名 /image/文件名 公开访问。
+本地图片仅支持 JPG、PNG、GIF、WebP、AVIF（不支持 SVG，以防同源脚本风险）。
+同一款式编码 + 文件前缀 + 扩展名会覆盖先前文件。图片目录被 .gitignore 忽略。
+首次上线须执行：
+
+```bash
+install -d -o ratingapp -g ratingapp -m 750 "$(pwd)/image"
+systemctl daemon-reload
+systemctl restart new-product-rating
+```
+
+原七牛云等 S3 配置保留；默认仍保持“只粘贴图片链接”，切换本地需要管理员手动保存。

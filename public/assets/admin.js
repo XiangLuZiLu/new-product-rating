@@ -1351,7 +1351,8 @@ function applyS3ProviderPreset(provider) {
 function fillImageSettingsForm(settings = {}) {
   if (!imageStorageForm) return;
   const data = normalizeImageSettingsLocal(settings);
-  imageStorageForm.elements.driver.value = ['url', 'r2', 's3'].includes(data.driver) ? data.driver : 'url';
+  // VPS_LOCAL_IMAGES_TOAST_V1
+  imageStorageForm.elements.driver.value = ['url', 'local', 'r2', 's3'].includes(data.driver) ? data.driver : 'url';
   if (imageStorageForm.elements.s3_provider) imageStorageForm.elements.s3_provider.value = data.s3_provider || guessS3Provider(data.s3_endpoint || '') || 'custom';
   imageStorageForm.elements.image_max_size_mb.value = data.image_max_size_mb || 10;
   imageStorageForm.elements.image_key_prefix.value = data.image_key_prefix || 'review-images';
@@ -1390,6 +1391,8 @@ function toggleImageSettingsFields() {
   const driver = imageStorageForm.elements.driver.value;
   const isS3 = driver === 's3';
   imageStorageForm.querySelectorAll('.s3-dependent, .s3-settings').forEach(el => el.classList.toggle('hidden', !isS3));
+  imageStorageForm.querySelectorAll('.local-storage-notice').forEach(el => el.classList.toggle('hidden', driver !== 'local'));
+  imageStorageForm.querySelectorAll('.cloud-settings').forEach(el => el.classList.toggle('hidden', driver === 'local'));
 }
 
 function readScoreTypesFromEditor() {

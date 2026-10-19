@@ -41,6 +41,8 @@ export const DEFAULT_GRADE_RULES = {
 
 function normalizeImageDriverValue(value) {
   const raw = String(value || 'url').trim().toLowerCase();
+  // VPS_LOCAL_IMAGES_TOAST_V1
+  if (['local', 'disk', 'file'].includes(raw)) return 'local';
   if (['r2', 'cloudflare-r2'].includes(raw)) return 'r2';
   if (['s3', 'oss', 'cos', 'minio', 'qiniu', 'qiniu-s3', 'aws-s3'].includes(raw)) return 's3';
   return 'url';

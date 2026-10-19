@@ -7,6 +7,8 @@ import pagesApp from './platform/index.js';
 import { onRequest as adminMiddleware } from './platform/api/_middleware.js';
 import { createSqliteStorage } from './sqlite-storage.js';
 import { tryDeleteImageByUrl } from './platform/_shared/imageStorage.js';
+// VPS_LOCAL_IMAGES_TOAST_V1
+import { getLocalImageFile } from './local-image.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const publicDir = resolve(root, 'public');
@@ -19,7 +21,7 @@ const port = Number(env.PORT || 18080);
 if (!Number.isInteger(port) || port<1 || port>65535) throw new Error('PORT 无效');
 const storage = createSqliteStorage(env);
 const mime={'.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.html':'text/html; charset=utf-8',
-  '.ico':'image/x-icon','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp','.svg':'image/svg+xml',
+  '.ico':'image/x-icon','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp','.gif':'image/gif','.avif':'image/avif','.svg':'image/svg+xml',
   '.xlsx':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','.json':'application/json; charset=utf-8'};
 function json(data,status=200){return new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}});}
 function errorResponse(e){return json({ok:false,code:e?.code||undefined,message:e?.message||'请求失败'},e?.status||500);}
@@ -31,10 +33,10 @@ function staticPath(pathname) {
   if(!path.startsWith(publicDir+sep)||!existsSync(path)||!statSync(path).isFile())return null;
   return path;
 }
-function staticResponse(path, req, res) {
+function staticResponse(path, req, res, cacheControl = 'public, max-age=300') {
   const info=statSync(path);
   res.writeHead(200,{'content-type':mime[extname(path)]||'application/octet-stream','content-length':info.size,
-    'x-content-type-options':'nosniff','cache-control':'public, max-age=300'});
+    'x-content-type-options':'nosniff','cache-control':cacheControl});
   if(req.method==='HEAD'){res.end();return;}
   createReadStream(path).pipe(res);
 }
@@ -85,8 +87,16 @@ async function dispatch(request) {
 }
 const server=http.createServer(async(req,res)=>{
   try{
-    if(req.headers['content-length'] && Number(req.headers['content-length'])>15*1024*1024){res.writeHead(413);res.end('Request Too Large');return;}
     const path=new URL(req.url||'/','http://localhost').pathname;
+    const limit = path === '/api/upload-image' ? 52*1024*1024 : 15*1024*1024;
+    if(req.headers['content-length'] && Number(req.headers['content-length'])>limit){res.writeHead(413);res.end('Request Too Large');return;}
+    if (path.startsWith('/image/')) {
+      const localFile = getLocalImageFile(path);
+      if (!localFile) { res.writeHead(404,{'content-type':'text/plain; charset=utf-8'});res.end('Not Found');return; }
+      if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405,{'allow':'GET, HEAD'});res.end();return; }
+      staticResponse(localFile, req, res, 'no-cache');
+      return;
+    }
     const file=staticPath(path);
     if(file&&(req.method==='GET'||req.method==='HEAD')){staticResponse(file,req,res);return;}
     const originProtocol=req.headers['x-forwarded-proto']==='https'?'https':'http';

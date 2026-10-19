@@ -2604,3 +2604,35 @@ button.is-busy::before {
 .vps-state-done { color:#166534;background:#dcfce7; }
 .vps-state-active { color:#92400e;background:#fef3c7; }
 @media(max-width:600px){.vps-progress-dialog{padding:15px}.vps-progress-table{min-width:470px}}
+
+/* VPS_LOCAL_IMAGES_TOAST_V1: consistent centered success/error messages, on both admin and public pages */
+body .message {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 110000;
+  width: max-content;
+  max-width: min(90vw, 520px);
+  margin: 0;
+  padding: 16px 24px;
+  text-align: center;
+  font-size: 15px;
+  line-height: 1.65;
+  font-weight: 600;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  box-shadow: 0 16px 45px rgba(15, 23, 42, .20);
+  pointer-events: none;
+  border-radius: 14px;
+}
+body .message.hidden { display: none !important; }
+.local-storage-notice {
+  margin: 6px 0 12px;
+  padding: 12px 14px;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+.local-storage-notice code { overflow-wrap: anywhere; }

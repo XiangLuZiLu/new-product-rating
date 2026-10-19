@@ -16,7 +16,7 @@ function adminHtml(adminPath, sessionIdleMinutes) {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>新品评审后台</title>
-  <link rel="stylesheet" href="/assets/style.css?v=20261017-vps-v1" />
+  <link rel="stylesheet" href="/assets/style.css?v=20261019-vps-local-image-v2" />
 </head>
 <body>
   <div class="page-bg"></div>
@@ -83,10 +83,13 @@ function adminHtml(adminPath, sessionIdleMinutes) {
             <label class="image-driver-field">图片存储方式
               <select class="pretty-select image-pretty-select" name="driver">
                 <option value="url">只粘贴图片链接</option>
+                <!-- VPS_LOCAL_IMAGES_TOAST_V1 -->
+                <option value="local">本地存储（项目目录 ./image）</option>
                 <option value="s3">国内OSS / S3兼容：七牛云、阿里云OSS、腾讯云COS</option>
                 <option value="r2">Cloudflare R2（仅 Cloudflare Pages 使用）</option>
               </select>
             </label>
+            <p class="tip local-storage-notice hidden" role="status">本地图片保存至项目目录 <code>./image/</code>（路径自动跟随实际部署目录）。上传后将生成同站点的 <code>/image/文件名</code> 访问地址；无需配置 CDN、S3 密钥。</p>
             <div class="image-config-row image-config-row-three">
               <label class="s3-dependent">国内OSS服务商
                 <select class="pretty-select image-pretty-select" name="s3_provider">
@@ -100,7 +103,7 @@ function adminHtml(adminPath, sessionIdleMinutes) {
               <label>上传大小上限MB<input name="image_max_size_mb" type="number" min="1" max="50" step="1" placeholder="10" /></label>
               <label>文件名前缀<input name="image_key_prefix" placeholder="review-images" /></label>
             </div>
-            <div class="image-config-row image-config-row-two">
+            <div class="image-config-row image-config-row-two cloud-settings">
               <label>图片公开访问域名 / CDN域名<input name="public_image_base_url" placeholder="例如 https://img.example.com；国内OSS建议配置 CDN 或公开访问域名" /></label>
               <label>公开访问路径前缀<input name="public_image_path_prefix" placeholder="例如七牛需要 /xianglupiju 时填 xianglupiju；不需要则留空" /></label>
             </div>
@@ -294,13 +297,13 @@ function adminHtml(adminPath, sessionIdleMinutes) {
     </section>
   </main>
   <script>window.__ADMIN_PATH__ = ${JSON.stringify(adminPath)}; window.__SESSION_IDLE_MINUTES__ = ${JSON.stringify(sessionIdleMinutes)};</script>
-  <script src="/assets/admin.js?v=20261017-vps-v1" defer></script>
+  <script src="/assets/admin.js?v=20261019-vps-local-image-v2" defer></script>
 </body>
 </html>`;
 }
 
 function ratingHtml() {
-  return "<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n  <meta charset=\"utf-8\" />\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1, viewport-fit=cover\" />\n  <title>新品评审评分</title>\n  <link rel=\"stylesheet\" href=\"/assets/style.css?v=20261017-vps-v1\" />\n</head>\n<body>\n  <div class=\"page-bg\"></div>\n  <main class=\"container public-container\">\n    <header id=\"publicTopbar\" class=\"topbar public-topbar hidden\">\n      <div>\n        <h1>新品评审评分</h1>\n        <p id=\"gradeRuleIntro\">评分项和满分由后台配置；80%以上大单，60%以上中单，40%以上小单试水，40%以下建议不下</p>\n      </div>\n    </header>\n\n    <section id=\"accessErrorView\" class=\"login-card card access-error-card hidden\" role=\"alert\">\n      <div class=\"brand\">\n        <div class=\"brand-mark access-error-mark\">!</div>\n        <div>\n          <h1>无法进入评分</h1>\n        </div>\n      </div>\n      <p id=\"accessErrorText\" class=\"access-error-tip\">访问地址有问题，请联系管理员获取正确的评分链接。</p>\n    </section>\n\n    <div id=\"message\" class=\"message hidden\"></div>\n\n    <section id=\"nameView\" class=\"login-card card hidden\">\n      <div class=\"brand\">\n        <div class=\"brand-mark\">评</div>\n        <div>\n          <h1>开始评分</h1>\n          <p>请先输入你的姓名，之后系统会按后台配置的款式逐个评分。</p>\n          <p id=\"nameGradeRuleIntro\" class=\"tip name-rule-tip\">评分项和满分由后台配置；80%以上大单，60%以上中单，40%以上小单试水，40%以下建议不下</p>\n        </div>\n      </div>\n      <form id=\"reviewerForm\" class=\"login-form\">\n        <label>\n          评分人姓名 <span class=\"required\">*</span>\n          <input name=\"reviewer\" placeholder=\"请输入你的姓名\" autocomplete=\"name\" required />\n        </label>\n        <button type=\"submit\" class=\"primary full\">进入评分</button>\n      </form>\n      <p class=\"tip\">评分必须通过管理员生成的有效链接进入，不需要后台账号。</p>\n    </section>\n\n    <section id=\"ratingView\" class=\"card score-card hidden\">\n      <div class=\"section-title score-title\">\n        <div>\n          <h2>逐款评分</h2>\n          <p class=\"tip\">当前款评分完整后，“下一页”才会亮起；最后一款点击“提交”后，才会一次性写入数据库。</p>\n        </div>\n        <div class=\"reviewer-pill\">评分人：<strong id=\"reviewerNameText\"></strong></div>\n      </div>\n\n      <div class=\"score-toolbar no-print\">\n        <button id=\"prevSlideBtn\" class=\"ghost\" type=\"button\">上一页</button>\n        <div class=\"slide-status\">\n          <strong id=\"slideCounter\">第 1 / 1 款</strong>\n          <span id=\"slideHint\">请完成当前款评分</span>\n        </div>\n        <button id=\"nextSlideBtn\" class=\"ghost\" type=\"button\" disabled>下一页</button>\n      </div>\n\n      <div id=\"scoreCarousel\" class=\"score-carousel\" aria-live=\"polite\"></div>\n      <div id=\"slideDots\" class=\"slide-dots no-print\"></div>\n\n      <div class=\"page-bottom-nav no-print\" role=\"navigation\" aria-label=\"评分分页操作\">\n        <button id=\"bottomPrevBtn\" class=\"bottom-nav-btn\" type=\"button\">上一页</button>\n        <button id=\"bottomNextBtn\" class=\"bottom-nav-btn primary-bottom\" type=\"button\" disabled>下一页</button>\n      </div>\n    </section>\n\n    <section id=\"doneView\" class=\"login-card card hidden\">\n      <div class=\"brand\">\n        <div class=\"brand-mark\">✓</div>\n        <div>\n          <h1>评分完成</h1>\n          <p id=\"doneText\">本次评分已提交。</p>\n        </div>\n      </div>\n      <button id=\"restartBtn\" type=\"button\" class=\"primary full\">重新评分</button>\n    </section>\n  </main>\n  <script>\n    (() => {\n      const parts = window.location.pathname.split('/').filter(Boolean);\n      const code = parts.length === 1 ? parts[0] : '';\n      const looksLikeReviewLink = !!code && !/^(assets|api|admin)$/i.test(code) && !code.includes('.');\n      const target = document.getElementById(looksLikeReviewLink ? 'nameView' : 'accessErrorView');\n      if (target) target.classList.remove('hidden');\n      if (looksLikeReviewLink) document.getElementById('publicTopbar')?.classList.remove('hidden');\n    })();\n  </script>\n  <script src=\"/assets/rating.js?v=20261017-vps-v1\" defer></script>\n</body>\n</html>\n";
+  return "<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n  <meta charset=\"utf-8\" />\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1, viewport-fit=cover\" />\n  <title>新品评审评分</title>\n  <link rel=\"stylesheet\" href=\"/assets/style.css?v=20261019-vps-local-image-v2\" />\n</head>\n<body>\n  <div class=\"page-bg\"></div>\n  <main class=\"container public-container\">\n    <header id=\"publicTopbar\" class=\"topbar public-topbar hidden\">\n      <div>\n        <h1>新品评审评分</h1>\n        <p id=\"gradeRuleIntro\">评分项和满分由后台配置；80%以上大单，60%以上中单，40%以上小单试水，40%以下建议不下</p>\n      </div>\n    </header>\n\n    <section id=\"accessErrorView\" class=\"login-card card access-error-card hidden\" role=\"alert\">\n      <div class=\"brand\">\n        <div class=\"brand-mark access-error-mark\">!</div>\n        <div>\n          <h1>无法进入评分</h1>\n        </div>\n      </div>\n      <p id=\"accessErrorText\" class=\"access-error-tip\">访问地址有问题，请联系管理员获取正确的评分链接。</p>\n    </section>\n\n    <div id=\"message\" class=\"message hidden\"></div>\n\n    <section id=\"nameView\" class=\"login-card card hidden\">\n      <div class=\"brand\">\n        <div class=\"brand-mark\">评</div>\n        <div>\n          <h1>开始评分</h1>\n          <p>请先输入你的姓名，之后系统会按后台配置的款式逐个评分。</p>\n          <p id=\"nameGradeRuleIntro\" class=\"tip name-rule-tip\">评分项和满分由后台配置；80%以上大单，60%以上中单，40%以上小单试水，40%以下建议不下</p>\n        </div>\n      </div>\n      <form id=\"reviewerForm\" class=\"login-form\">\n        <label>\n          评分人姓名 <span class=\"required\">*</span>\n          <input name=\"reviewer\" placeholder=\"请输入你的姓名\" autocomplete=\"name\" required />\n        </label>\n        <button type=\"submit\" class=\"primary full\">进入评分</button>\n      </form>\n      <p class=\"tip\">评分必须通过管理员生成的有效链接进入，不需要后台账号。</p>\n    </section>\n\n    <section id=\"ratingView\" class=\"card score-card hidden\">\n      <div class=\"section-title score-title\">\n        <div>\n          <h2>逐款评分</h2>\n          <p class=\"tip\">当前款评分完整后，“下一页”才会亮起；最后一款点击“提交”后，才会一次性写入数据库。</p>\n        </div>\n        <div class=\"reviewer-pill\">评分人：<strong id=\"reviewerNameText\"></strong></div>\n      </div>\n\n      <div class=\"score-toolbar no-print\">\n        <button id=\"prevSlideBtn\" class=\"ghost\" type=\"button\">上一页</button>\n        <div class=\"slide-status\">\n          <strong id=\"slideCounter\">第 1 / 1 款</strong>\n          <span id=\"slideHint\">请完成当前款评分</span>\n        </div>\n        <button id=\"nextSlideBtn\" class=\"ghost\" type=\"button\" disabled>下一页</button>\n      </div>\n\n      <div id=\"scoreCarousel\" class=\"score-carousel\" aria-live=\"polite\"></div>\n      <div id=\"slideDots\" class=\"slide-dots no-print\"></div>\n\n      <div class=\"page-bottom-nav no-print\" role=\"navigation\" aria-label=\"评分分页操作\">\n        <button id=\"bottomPrevBtn\" class=\"bottom-nav-btn\" type=\"button\">上一页</button>\n        <button id=\"bottomNextBtn\" class=\"bottom-nav-btn primary-bottom\" type=\"button\" disabled>下一页</button>\n      </div>\n    </section>\n\n    <section id=\"doneView\" class=\"login-card card hidden\">\n      <div class=\"brand\">\n        <div class=\"brand-mark\">✓</div>\n        <div>\n          <h1>评分完成</h1>\n          <p id=\"doneText\">本次评分已提交。</p>\n        </div>\n      </div>\n      <button id=\"restartBtn\" type=\"button\" class=\"primary full\">重新评分</button>\n    </section>\n  </main>\n  <script>\n    (() => {\n      const parts = window.location.pathname.split('/').filter(Boolean);\n      const code = parts.length === 1 ? parts[0] : '';\n      const looksLikeReviewLink = !!code && !/^(assets|api|admin)$/i.test(code) && !code.includes('.');\n      const target = document.getElementById(looksLikeReviewLink ? 'nameView' : 'accessErrorView');\n      if (target) target.classList.remove('hidden');\n      if (looksLikeReviewLink) document.getElementById('publicTopbar')?.classList.remove('hidden');\n    })();\n  </script>\n  <script src=\"/assets/rating.js?v=20261019-vps-local-image-v2\" defer></script>\n</body>\n</html>\n";
 }
 
 function accessErrorHtml() {
@@ -310,7 +313,7 @@ function accessErrorHtml() {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>无法进入评分</title>
-  <link rel="stylesheet" href="/assets/style.css?v=20261017-vps-v1" />
+  <link rel="stylesheet" href="/assets/style.css?v=20261019-vps-local-image-v2" />
 </head>
 <body>
   <div class="page-bg"></div>

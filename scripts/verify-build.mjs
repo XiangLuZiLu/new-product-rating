@@ -15,3 +15,12 @@ if (!env.includes('HOST=127.0.0.1') || !env.includes('PORT=18080') || !env.inclu
 const gitignore = readFileSync('.gitignore','utf8');
 if (!gitignore.includes('data/')) throw new Error('缺少忽略数据库目录的规则');
 console.log('✓ 文件完整性、SQLite 存储接入、评分弹框、评分状态、18080 和数据目录检查通过');
+
+// VPS_LOCAL_IMAGES_TOAST_V1
+for (const f of ['server/local-image.js','scripts/local-images-smoke.mjs']) { if (!existsSync(f)) throw new Error('本地图片文件缺失：'+f); }
+if (!readFileSync('server/index.js','utf8').includes("getLocalImageFile")) throw new Error('本地图片公开路由未接入');
+if (!readFileSync('server/platform/_shared/imageStorage.js','utf8').includes("saveLocalImage")) throw new Error('本地图片上传未接入');
+if (!readFileSync('server/platform/[[path]].js','utf8').includes('value="local"')) throw new Error('本地图片选项未接入');
+if (!existsSync('scripts/render-rating-service.mjs')) throw new Error('缺少动态 systemd 配置生成脚本');
+if (!readFileSync('server/local-image.js','utf8').includes('fileURLToPath(import.meta.url)')) throw new Error('本地图片路径未使用项目目录动态计算');
+console.log('✓ 本地图片上传、展示、提示居中和服务权限配置检查通过');
