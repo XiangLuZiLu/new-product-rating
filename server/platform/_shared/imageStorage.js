@@ -222,7 +222,8 @@ export async function uploadImageFromRequest(request, env) {
   const file = form.get('file') || form.get('image');
   const styleCode = String(form.get('style_code') || '').trim();
   if (!isUploadFileLike(file)) throw jsonError('请上传图片文件字段 file', 400);
-  if (!String(file.type || '').startsWith('image/')) throw jsonError('只能上传图片文件', 400);
+  // IMAGE_MAGIC_AUTO_V1: 本地存储以真实二进制文件头为准，兼容扩展名/MIME 误标。
+  if (driver !== 'local' && !String(file.type || '').startsWith('image/')) throw jsonError('只能上传图片文件', 400);
   if (file.size <= 0) throw jsonError('图片文件为空', 400);
   const maxBytes = getMaxBytes(config);
   if (file.size > maxBytes) throw jsonError(`图片不能超过 ${Math.round(maxBytes / 1024 / 1024)}MB`, 400);

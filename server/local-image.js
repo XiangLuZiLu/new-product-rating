@@ -1,16 +1,12 @@
 // Local image storage for the VPS-only branch. Files are intentionally kept outside public/.
 import { lstatSync } from 'node:fs';
 import { mkdir, writeFile, rename, unlink } from 'node:fs/promises';
-import { dirname, extname, join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const LOCAL_IMAGE_DIR = resolve(projectRoot, 'image');
-const extensions = new Map([
-  ['.jpg', 'image/jpeg'], ['.jpeg', 'image/jpeg'], ['.png', 'image/png'],
-  ['.webp', 'image/webp'], ['.gif', 'image/gif'], ['.avif', 'image/avif']
-]);
 const goodKey = (key) => /^[A-Za-z0-9_-]{1,170}\.(?:jpe?g|png|webp|gif|avif)$/.test(String(key || ''));
 function badInput(message) { const e = new Error(message); e.status = 400; return e; }
 
@@ -24,14 +20,28 @@ function imageSignatureMatches(bytes, type) {
   return false;
 }
 
-export async function saveLocalImage(key, arrayBuffer, contentType) {
-  if (!goodKey(key)) throw badInput('本地存储仅支持 JPG、PNG、GIF、WebP 和 AVIF 图片');
-  const type = extensions.get(extname(key).toLowerCase());
-  if (String(contentType).toLowerCase() !== type) throw badInput('图片格式与文件扩展名不一致');
+// IMAGE_MAGIC_AUTO_V1: 判断实际文件内容，不信任用户上传的扩展名或浏览器 MIME 类型。
+// 依然严格禁止无法识别的文件，包括 SVG、HTML 等可执行内容。
+function realImageFormat(bytes) {
+  const formats = [
+    ['image/jpeg', 'jpg'], ['image/png', 'png'], ['image/gif', 'gif'],
+    ['image/webp', 'webp'], ['image/avif', 'avif']
+  ];
+  const detected = formats.find(([mime]) => imageSignatureMatches(bytes, mime));
+  return detected ? { mime: detected[0], ext: detected[1] } : null;
+}
+
+export async function saveLocalImage(key, arrayBuffer, _declaredContentType = '') {
+  // 文件名已由后端 buildObjectKey 生成，不能允许任意路径或目录穿越。
+  const name = /^([A-Za-z0-9_-]{1,170})\.[A-Za-z0-9]{1,8}$/.exec(String(key || ''));
+  if (!name) throw badInput('图片文件名不符合安全规则');
   const bytes = new Uint8Array(arrayBuffer);
-  if (!imageSignatureMatches(bytes, type)) throw badInput('图片文件内容无效或格式不匹配');
+  const actual = realImageFormat(bytes);
+  if (!actual) throw badInput('无法识别图片真实格式，仅支持 JPG、PNG、GIF、WebP、AVIF');
+  const realKey = `${name[1]}.${actual.ext}`;
+  if (!goodKey(realKey)) throw badInput('图片文件名不符合安全规则');
   await mkdir(LOCAL_IMAGE_DIR, { recursive: true, mode: 0o750 });
-  const file = join(LOCAL_IMAGE_DIR, key);
+  const file = join(LOCAL_IMAGE_DIR, realKey);
   const temp = join(LOCAL_IMAGE_DIR, `.${randomUUID()}.tmp`);
   try {
     await writeFile(temp, bytes, { flag:'wx', mode: 0o640 });
@@ -40,7 +50,8 @@ export async function saveLocalImage(key, arrayBuffer, contentType) {
     await unlink(temp).catch(() => {});
     throw error;
   }
-  return { key, url: `/image/${encodeURIComponent(key)}`, raw_url: `/image/${encodeURIComponent(key)}`, storage:'local' };
+  const url = `/image/${encodeURIComponent(realKey)}`;
+  return { key: realKey, url, raw_url: url, storage: 'local', content_type: actual.mime };
 }
 
 export function getLocalImageFile(pathname) {

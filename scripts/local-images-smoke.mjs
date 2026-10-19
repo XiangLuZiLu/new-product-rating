@@ -62,6 +62,22 @@ try{
   const invalid=await fetch(base+'/image/.env');
   assert(invalid.status===404,'不应公开读取非图片文件');
   console.log('✓ 图片公开 GET/HEAD，其他文件拒绝');
+  // IMAGE_MAGIC_AUTO_V1: 真实 WebP 被错误命名为 123.PNG，并按 image/png 发送。
+  const webp=Buffer.from('UklGRjgAAABXRUJQVlA4ICwAAADQAQCdASoCAAIAAUAmJaACdLoB+AADsACb/87BsS7Xjn/9g7+cB+cB/RQAAA==','base64');
+  const wrongName=new FormData();
+  wrongName.append('file',new Blob([webp],{type:'image/png'}),'123.PNG');
+  wrongName.append('style_code','MISMATCH-STYLE');
+  const guessed=await fetch(base+'/api/upload-image',{method:'POST',headers:{cookie},body:wrongName});
+  const guessedBody=await guessed.json();
+  assert(guessed.ok && guessedBody.ok && guessedBody.image?.content_type==='image/webp',
+    `伪装扩展名 WebP 上传失败：${JSON.stringify(guessedBody)}`);
+  assert(guessedBody.url === `/image/${prefix}-MISMATCH-STYLE.webp`, '真实格式没有自动更正为 .webp');
+  const webpPreview=await fetch(base+guessedBody.url);
+  assert(webpPreview.ok && webpPreview.headers.get('content-type')?.includes('image/webp'), 'WebP 预览 MIME 错误');
+  assert(Buffer.from(await webpPreview.arrayBuffer()).equals(webp), 'WebP 预览内容不一致');
+  const webpDeleted=await deleteLocalImageUrl(guessedBody.url,{image_key_prefix:prefix});
+  assert(webpDeleted.deleted,'WebP 测试图片未成功清理');
+  console.log('✓ 123.PNG 实际 WebP：自动纠正为 .webp，HTTP 可预览');
   const evil=new FormData();
   evil.append('file',new Blob(['<svg><script>alert(1)</script></svg>'],{type:'image/svg+xml'}),'evil.svg');
   evil.append('style_code','BAD-STYLE');

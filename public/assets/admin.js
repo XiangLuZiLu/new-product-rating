@@ -2586,7 +2586,7 @@ function renderStylePreviewImage(url, note = '') {
   const safe = String(url || '').trim();
   const src = /^blob:|^data:/i.test(safe) ? safe : displayImageUrl(safe);
   stylePreview.innerHTML = safe
-    ? `<img class="image-preview" src="${escapeHtml(src)}" alt="产品图预览" loading="lazy" referrerpolicy="no-referrer" />${note ? `<small class="preview-note">${escapeHtml(note)}</small>` : ''}`
+    ? `<img class="image-preview" src="${escapeHtml(src)}" data-preview-image="${escapeHtml(src)}" alt="产品图预览（点击可放大）" loading="lazy" referrerpolicy="no-referrer" />${note ? `<small class="preview-note">${escapeHtml(note)}</small>` : ''}`
     : '<span>拖拽图片到这里、点击选择，或复制图片后按 Ctrl+V 粘贴</span>';
 }
 function setImagePreview(url, options = {}) {
@@ -2602,7 +2602,8 @@ function setLocalImagePreview(file) {
   pendingStyleImageFile = file || null;
   if (!file) return;
   stylePreviewLocalObjectUrl = URL.createObjectURL(file);
-  renderStylePreviewImage(stylePreviewLocalObjectUrl, '本地预览：点击保存款式后才会上传，取消/换图前不会写入七牛云');
+  // IMAGE_MAGIC_AUTO_V1
+  renderStylePreviewImage(stylePreviewLocalObjectUrl, '本地预览：可点击图片放大；保存款式后才上传到当前配置的图片存储');
 }
 function resetStyleForm() {
   editingStyleId = null;
