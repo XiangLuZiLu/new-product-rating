@@ -1,4 +1,7 @@
 import { getStorage, gradeByScore } from '../_shared/storage.js';
+import { readFile, stat } from 'node:fs/promises';
+import { getLocalImageFile } from '../../local-image.js';
+// VPS_FLOATING_IMAGES_SAFE_FIX_V1
 
 const encoder = new TextEncoder();
 
@@ -434,6 +437,32 @@ function resolveSummaryImageUrl(rawValue, requestUrl, imageSettings = {}) {
   }
 }
 
+
+// VPS 本地上传的产品图是 /image/<随机文件名>，不应通过公网域名回源下载。
+// 历史更换过域名时，只要本地存在相同图片文件，也优先用本地数据。
+function resolveExportLocalImageFile(rawValue, requestUrl) {
+  const raw = stripSummaryImageProxyValue(rawValue, requestUrl);
+  if (!raw) return null;
+  try {
+    const relative = raw.startsWith('image/') ? '/' + raw : raw;
+    const parsed = new URL(relative, requestUrl);
+    if (!parsed.pathname.startsWith('/image/')) return null;
+    return getLocalImageFile(parsed.pathname);
+  } catch (_) {
+    return null;
+  }
+}
+
+function exportLocalImageType(filePath) {
+  const lower = String(filePath || '').toLowerCase();
+  if (/\.png$/.test(lower)) return { ext: 'png', contentType: 'image/png' };
+  if (/\.jpe?g$/.test(lower)) return { ext: 'jpg', contentType: 'image/jpeg' };
+  if (/\.gif$/.test(lower)) return { ext: 'gif', contentType: 'image/gif' };
+  if (/\.webp$/.test(lower)) return { ext: 'webp', contentType: 'image/webp' };
+  if (/\.avif$/.test(lower)) return { ext: 'avif', contentType: 'image/avif' };
+  return null;
+}
+
 async function inspectSummaryImage(rawValue, requestUrl, imageSettings = {}) {
   const resolvedUrl = resolveSummaryImageUrl(rawValue, requestUrl, imageSettings);
   const result = {
@@ -447,6 +476,23 @@ async function inspectSummaryImage(rawValue, requestUrl, imageSettings = {}) {
     final_url: '',
     error: ''
   };
+  const localFile = resolveExportLocalImageFile(rawValue, requestUrl);
+  if (localFile) {
+    result.source = 'local';
+    result.resolved_url = String(rawValue || '');
+    try {
+      const info = await stat(localFile);
+      result.status = 200;
+      result.content_length = String(info.size);
+      result.content_type = exportLocalImageType(localFile)?.contentType || '';
+      result.ok = info.isFile() && info.size > 0 && info.size <= 8 * 1024 * 1024;
+      result.final_url = '/image/' + encodeURIComponent(localFile.split(/[\\/]/).pop());
+      if (!result.ok) result.error = '本地图片为空或超过导出图片 8MB 限制';
+    } catch (error) {
+      result.error = '读取本地图片失败：' + String(error?.message || error);
+    }
+    return result;
+  }
   if (!resolvedUrl) return result;
 
   try {
@@ -473,6 +519,32 @@ async function fetchSummaryImages(dataRows, requestUrl, imageSettings = {}) {
   const images = [];
   for (let i = 0; i < dataRows.length; i += 1) {
     const rawValue = String(dataRows[i].imageUrl || '').trim();
+
+    // VPS：优先直接从磁盘读取本地产品图，避免 CDN 回源、旧域名、HTTPS 和 DNS 问题。
+    const localFile = resolveExportLocalImageFile(rawValue, requestUrl);
+    if (localFile) {
+      try {
+        const info = await stat(localFile);
+        const format = exportLocalImageType(localFile);
+        if (!info.isFile() || !info.size || info.size > 8 * 1024 * 1024 || !format) {
+          console.warn('评分汇总图片跳过：本地文件大小或格式不符合要求，行号', i + 1);
+          continue;
+        }
+        const bytes = new Uint8Array(await readFile(localFile));
+        images.push({
+          filename: 'image' + (images.length + 1) + '.' + format.ext,
+          ext: format.ext,
+          contentType: format.contentType,
+          bytes,
+          dataRowIndex: i
+        });
+      } catch (error) {
+        console.warn('评分汇总本地图片读取失败，行号', i + 1, String(error?.message || error));
+      }
+      continue;
+    }
+
+    // 历史云端图片、第三方图片：仍按原来的 HTTP(S) 下载流程处理。
     const target = resolveSummaryImageUrl(rawValue, requestUrl, imageSettings);
     if (!target) continue;
     try {
